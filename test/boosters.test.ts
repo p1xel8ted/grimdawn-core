@@ -18,6 +18,7 @@ import {
   haveCustomSaves,
   haveGameInstall,
   haveSaves,
+  primaryCharacter,
 } from './paths.js';
 
 describe('factionSlotByKey', () => {
@@ -127,16 +128,23 @@ describe.skipIf(!haveSaves())('encodeBlock13 (live saves)', () => {
   });
 });
 
+/**
+ * Whichever character this machine has. Every assertion below is about what the
+ * game sells and what the writer touches, not about who is being edited, so the
+ * subject only has to exist.
+ */
+const SUBJECT = haveSaves() ? primaryCharacter() : '';
+
 describe.skipIf(!haveSaves() || !haveGameInstall())('applying faction boosters (live saves)', () => {
   if (!haveSaves() || !haveGameInstall()) it.skip(`${MISSING_SAVES_MESSAGE} / ${MISSING_GAME_MESSAGE}`, () => {});
 
   async function plan(source: Buffer, opts: Record<string, unknown> = {}) {
     const { save, transcript } = parseGdcRecording(source);
-    return planFactionBoosters({ character: '_Suchka', save, transcript, source, db: await gameDb(), ...opts });
+    return planFactionBoosters({ character: SUBJECT, save, transcript, source, db: await gameDb(), ...opts });
   }
 
   it('sets every booster the game sells, and nothing else in the file', async () => {
-    const source = readFileSync(characterSavePath('_Suchka'));
+    const source = readFileSync(characterSavePath(SUBJECT));
     const before = parseGdc(source);
     const result = await plan(source);
 
@@ -172,7 +180,7 @@ describe.skipIf(!haveSaves() || !haveGameInstall())('applying faction boosters (
   });
 
   it('is a no-op the second time — an applied booster is not rewritten', async () => {
-    const source = readFileSync(characterSavePath('_Suchka'));
+    const source = readFileSync(characterSavePath(SUBJECT));
     const once = await plan(source);
     const twice = await plan(once.output!);
 
@@ -183,7 +191,7 @@ describe.skipIf(!haveSaves() || !haveGameInstall())('applying faction boosters (
   });
 
   it('clears every multiplier, including a writ the character had already used', async () => {
-    const source = readFileSync(characterSavePath('_Suchka'));
+    const source = readFileSync(characterSavePath(SUBJECT));
     const before = parseGdc(source);
     // This character has consumed Writs: some slots read 1.5 rather than 0.
     expect(before.factions.some((f) => f.positiveBoost === 1.5)).toBe(true);
@@ -198,7 +206,7 @@ describe.skipIf(!haveSaves() || !haveGameInstall())('applying faction boosters (
   });
 
   it('honours --no-warrants and --faction, and refuses a faction it does not know', async () => {
-    const source = readFileSync(characterSavePath('_Suchka'));
+    const source = readFileSync(characterSavePath(SUBJECT));
 
     const writsOnly = await plan(source, { warrants: false });
     expect(writsOnly.changes.every((c) => c.kind === 'reputation')).toBe(true);

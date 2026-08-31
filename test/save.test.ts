@@ -7,6 +7,7 @@ import { factionTier } from '../src/save/factions.js';
 import { GdWriter, synthBlock } from './gdwriter.js';
 import {
   CHARACTERS,
+  primaryCharacter,
   MISSING_SAVES_MESSAGE,
   characterSavePath,
   haveSaves,
@@ -187,19 +188,31 @@ describe.skipIf(!haveSaves())('live player.gdc saves', () => {
     ];
     for (const item of allItems) {
       expect(item.baseName).toMatch(/^records\/.*\.dbr$/);
-      expect(item.stackCount).toBeGreaterThanOrEqual(1);
+      // A save writes 0 for something that does not stack, so 0 is a count and
+      // not a missing one. `_Stiix` holds four: summon crates, a brew and a
+      // wisp, all under `records/items/bonusitems/`. Consumers floor it at 1;
+      // the parser must report what is in the file.
+      expect(item.stackCount).toBeGreaterThanOrEqual(0);
+      expect(Number.isInteger(item.stackCount)).toBe(true);
     }
   });
 
-  it('reads the expected gear and progression for the primary fixture', () => {
-    // Snapshot-copied so playing the character does not break these assertions.
-    const save = parseGdc(readFileSync(snapshotCharacterSave('_Suchka')));
+  it.runIf(haveSaves())('reads the expected gear and progression for the primary fixture', () => {
+    // Snapshot-copied so playing the character does not break these assertions,
+    // and discovered rather than named: the developed character is a different
+    // one on each machine, and a hardcoded name is an ENOENT on the others.
+    const subject = primaryCharacter();
+    const save = parseGdc(readFileSync(snapshotCharacterSave(subject)));
 
-    expect(save.name).toBe('Suchka');
-    expect(save.hardcore).toBe(false);
-    expect(save.difficulty).toBe('Ultimate');
-    expect(save.iron).toBeGreaterThan(0);
-    expect(save.masteriesAllowed).toBe(2);
+    expect(save.name).toBe(subject.replace(/^_/, ''));
+    // Shape, not biography: which difficulty this character is on and how much
+    // iron they are carrying says nothing about the parser, and pinning it to
+    // one machine's character is what made this test an ENOENT on the other.
+    // The structural claims below are the ones worth making.
+    expect(typeof save.hardcore).toBe('boolean');
+    expect(['Normal', 'Elite', 'Ultimate']).toContain(save.difficulty);
+    expect(save.iron).toBeGreaterThanOrEqual(0);
+    expect(save.masteriesAllowed).toBeGreaterThanOrEqual(1);
 
     // A fully-geared character: all 12 slots filled, and the slot mapping is
     // confirmed by each record living under its slot's item category.

@@ -240,6 +240,14 @@ describe('formulas.gst', () => {
 // Live files
 // ---------------------------------------------------------------------------
 
+/** How much is actually in the transfer stash on this machine. Often nothing. */
+const TRANSFER_STASH_ITEMS = haveTransferStash()
+  ? parseTransferStash(readFileSync(snapshotSharedSave(TRANSFER_STASH_PATH))).sacks.reduce(
+      (n, sack) => n + sack.items.length,
+      0,
+    )
+  : 0;
+
 describe.skipIf(!haveTransferStash())('live transfer.gst', () => {
   if (!haveTransferStash()) it.skip(MISSING_GST_MESSAGE, () => {});
 
@@ -283,11 +291,29 @@ describe.skipIf(!haveTransferStash())('live transfer.gst', () => {
 
     expect(stash.version).toBe(11);
     expect(stash.expansionStatus).toBe(7); // all three expansions
-    expect(stash.sacks).toHaveLength(2);
-    expect(stash.sacks.reduce((n, s) => n + s.items.length, 0)).toBeGreaterThan(10);
-    // Stacked consumables are what pins `stackCount` to the right field.
-    expect(stash.sacks.flatMap((s) => s.items).some((i) => i.stackCount > 1)).toBe(true);
+    // How many tabs an account has is something the player buys, not a fact
+    // about the format: this machine's stash has ten where the one this was
+    // written on had two. What the parser owes is a sack per tab, with items.
+    expect(stash.sacks.length).toBeGreaterThanOrEqual(1);
+    for (const sack of stash.sacks) {
+      expect(sack.width).toBeGreaterThan(0);
+      expect(sack.height).toBeGreaterThan(0);
+    }
   });
+
+  // An empty transfer stash is an ordinary state, not a parse failure: this
+  // machine's is 477 bytes, ten tabs wide and holds nothing. The claim below
+  // needs stock to make, so it says when it cannot make it rather than being
+  // folded into an `if` inside the test above.
+  it.runIf(TRANSFER_STASH_ITEMS > 0)('pins stackCount to the right field, on stacked consumables', () => {
+    const stash = parseTransferStash(readFileSync(snapshotSharedSave(TRANSFER_STASH_PATH)));
+    const items = stash.sacks.flatMap((sack) => sack.items);
+
+    expect(items.length).toBeGreaterThan(10);
+    expect(items.some((i) => i.stackCount > 1)).toBe(true);
+  });
+
+  it.runIf(TRANSFER_STASH_ITEMS === 0)('the transfer stash on this machine is empty, so stacking is unchecked here', () => {});
 });
 
 // ---------------------------------------------------------------------------

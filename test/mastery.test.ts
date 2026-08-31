@@ -10,7 +10,7 @@ import {
   reconcileClassNumbers,
   type MasteryRef,
 } from '../src/save/mastery.js';
-import { CHARACTERS, MISSING_SAVES_MESSAGE, characterSavePath, characterWith, haveSaves } from './paths.js';
+import { CHARACTERS, MISSING_SAVES_MESSAGE, characterSavePath, characterWith, haveSaves, primaryCharacter } from './paths.js';
 
 describe('classTagFor', () => {
   it('concatenates the class numbers in ascending order', () => {
@@ -115,6 +115,14 @@ function findInvestedMastery(): { character: string; mastery: ReturnType<typeof 
   }
   return undefined;
 }
+
+/**
+ * Whichever character this machine has, for the refusals that are about the
+ * plan rather than about the save: an unknown mastery name and a tampered
+ * source are refused the same way whoever is being edited. Naming one was the
+ * staleness the comment above warns about, one machine over.
+ */
+const SUBJECT = haveSaves() ? primaryCharacter() : '';
 
 const RESET = haveSaves() ? findResetMastery() : undefined;
 const INVESTED = haveSaves() ? findInvestedMastery() : undefined;
@@ -232,20 +240,20 @@ describe.skipIf(!haveSaves())('removing a mastery (live saves)', () => {
   });
 
   it('refuses a mastery the character does not have', () => {
-    const { result } = plan('_Suchka', 'Necromancer');
+    const { result } = plan(SUBJECT, 'Necromancer');
 
     expect(result.refusals).toEqual([{ kind: 'unknown-mastery', record: 'Necromancer' }]);
     expect(result.output).toBeUndefined();
   });
 
   it('refuses a save it cannot reproduce byte for byte', () => {
-    const source = readFileSync(characterSavePath('_Suchka'));
+    const source = readFileSync(characterSavePath(SUBJECT));
     const { save, transcript } = parseGdcRecording(source);
     const tampered = Buffer.from(source);
     tampered[tampered.length - 1] = (tampered[tampered.length - 1]! ^ 0xff) & 0xff;
 
     const result = planMasteryRemoval({
-      character: '_Suchka',
+      character: SUBJECT,
       save,
       transcript,
       source: tampered,
