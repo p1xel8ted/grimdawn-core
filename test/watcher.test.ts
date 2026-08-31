@@ -9,7 +9,7 @@
  * rather than against a stub that throws on command.
  */
 
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -25,6 +25,7 @@ import {
   haveReagents,
   haveSaves,
   haveTransferStash,
+  primaryCharacter,
   snapshotCharacterSave,
   snapshotSharedSave,
 } from './paths.js';
@@ -95,7 +96,11 @@ function torn(good: Buffer): Buffer {
 describe.runIf(haveSaves())('save watcher', () => {
   let good: Buffer;
   beforeAll(() => {
-    good = readFileSync(snapshotCharacterSave('_Suchka'));
+    // Any real save will do: what is being watched is the file, and the
+    // `_Suchka` below is only a directory name in a synthetic tree. The two are
+    // deliberately uncoupled, which is why `event.save.name` is asserted
+    // truthy rather than equal to it.
+    good = readFileSync(snapshotCharacterSave(primaryCharacter()));
   });
 
   it('reads a character save once per burst and reports the parsed save', async () => {
@@ -217,6 +222,13 @@ describe.runIf(haveSaves())('save watcher', () => {
     expect(backupSaves(dir, 'nobody')).toEqual([]);
     writeFileSync(join(charDir, 'player.g00'), 'a');
     writeFileSync(join(charDir, 'player.g01'), 'b');
+    // Two writes land in the same millisecond four times in five here, and the
+    // sort is stable, so writing them in order proves nothing: on a tie the
+    // readdir order survives and g00 comes back first. Age is the subject, so
+    // it is stated rather than raced for.
+    const now = Date.now() / 1000;
+    utimesSync(join(charDir, 'player.g00'), now, now - 2);
+    utimesSync(join(charDir, 'player.g01'), now, now);
     expect(backupSaves(dir, '_Suchka').map((p) => p.slice(charDir.length + 1))).toEqual([
       'player.g01',
       'player.g00',
