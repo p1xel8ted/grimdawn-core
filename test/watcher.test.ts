@@ -265,6 +265,26 @@ describe.runIf(haveSaves())('save watcher', () => {
       'player.g10',
     ]);
   });
+
+  // The matcher takes either case, so the parser has to. It did not: reading
+  // the digits by hand looked for a lowercase `.g`, so an uppercase name gave
+  // NaN and every comparison against it was a tie. These live in their own tree
+  // because the save volume is case-insensitive, and `player.G2` beside
+  // `player.g2` is one file, not two.
+  it('parses a rotation number in either case', () => {
+    const dir = tempSaveDir();
+    const charDir = join(dir, 'main', SUBJECT_DIR);
+    const same = Date.now() / 1000;
+    for (const name of ['player.G10', 'player.G2']) {
+      writeFileSync(join(charDir, name), name);
+      utimesSync(join(charDir, name), same, same);
+    }
+
+    expect(backupSaves(dir, SUBJECT_DIR).map((p) => p.slice(charDir.length + 1))).toEqual([
+      'player.G2',
+      'player.G10',
+    ]);
+  });
 });
 
 describe.runIf(haveTransferStash() && haveFormulas() && haveReagents())('account files', () => {

@@ -142,8 +142,8 @@ const ACCOUNT_PARSERS: Readonly<
   'formulas.gst': parseFormulasFile,
 };
 
-/** `player.g00`, `player.g01`, … — the game's own rotation backups. */
-const BACKUP_NAME = /^player\.g\d+$/i;
+/** `player.g00`, `player.g01`, … — the numbered rotation kept beside the save. */
+const BACKUP_NAME = /^player\.g(\d+)$/i;
 
 /**
  * A torn write does **not** throw, and that is the fact this whole module turns
@@ -203,8 +203,10 @@ export function backupSaves(saveDir: string, character: string): string[] {
 }
 
 /**
- * The number in `player.gNN`, lowest first: the game writes `g00` as the most
- * recent backup and ages the rest behind it.
+ * The number in `player.gNN`, lowest first: the rotation convention puts `g00`
+ * at the most recent backup and ages the rest behind it. (The game's own files
+ * are `player.gdc` and its `.bak`; these numbered ones are the rotation kept
+ * alongside them.)
  *
  * This is the tiebreak, and it is here because two backups written in the same
  * millisecond otherwise come back in whatever order the directory was
@@ -212,9 +214,15 @@ export function backupSaves(saveDir: string, character: string): string[] {
  * list until one parses, so an older file sorted first means quietly restoring
  * staler state than the character actually had. Compared as a number because
  * the name allows more than two digits, and `g10` is not older than `g2`.
+ *
+ * The digits come from the same expression that accepted the name, so the two
+ * cannot drift: reading them by hand missed that the match is case-insensitive,
+ * and a `player.G2` produced a NaN that made every comparison a tie.
  */
 function rotationOf(name: string): number {
-  return Number(name.slice(name.lastIndexOf('.g') + 2));
+  // Unmatched cannot happen: the caller filtered on this same expression. If it
+  // ever did, sorting it last is the safe end of a recovery list.
+  return Number(BACKUP_NAME.exec(name)?.[1] ?? Number.MAX_SAFE_INTEGER);
 }
 
 function mtimeOf(path: string): number {
