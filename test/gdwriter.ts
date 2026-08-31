@@ -48,3 +48,24 @@ export function writeItem(
   w.writeU32(0); // unknownExtra[2]
   w.writeU32(0); // unknownExtra[3]
 }
+
+/** The 14-field item struct used by legacy character blocks (v4 inventory / v6 stash). */
+export function writeLegacyItem(
+  w: GdWriter,
+  { baseName, stackCount = 0, seed = 0 }: { baseName: string; stackCount?: number; seed?: number },
+): void {
+  w.writeStr(baseName);
+  w.writeStr(''); // prefix
+  w.writeStr(''); // suffix
+  w.writeStr(''); // modifier
+  w.writeStr(''); // transmute
+  w.writeU32(seed);
+  w.writeStr(''); // relic (component)
+  w.writeStr(''); // relic bonus
+  w.writeU32(0); // relic seed
+  w.writeStr(''); // augment
+  w.writeU32(0); // unknown
+  w.writeU32(0); // augment seed
+  w.writeU32(0); // relic completion level
+  w.writeU32(stackCount);
+}

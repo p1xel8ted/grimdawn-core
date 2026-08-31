@@ -22,10 +22,10 @@ export interface ItemInstance {
   relicCompletionLevel: number;
   stackCount: number;
   /**
-   * Four fields present in 1.3.0.6 saves that the 1.2-era specs do not describe
-   * (two before `stackCount`, two after). They are zero for every item across
-   * both test characters, so their meaning is unknown — possibly empty strings
-   * rather than integers, which reads identically while they stay empty.
+   * Four fields present in modern 1.3.0.6 item containers that the legacy
+   * 14-field layout does not carry (two before `stackCount`, two after). Legacy
+   * items expose zeroes here as the neutral value; no corresponding bytes were
+   * present in their file.
    */
   unknownExtra: [number, number, number, number];
 }
@@ -128,16 +128,15 @@ export interface CharacterSkill {
   level: number;
   enabled: boolean;
   /**
-   * The byte after `enabled`. Long assumed to be padding, and it is not: it is
-   * 1 on exactly the 32 GDX3 potion-modifier entries of both test characters
-   * and 0 on everything else. Kept verbatim so the block can be written back.
+   * The v8 byte after `enabled`. It is absent (and represented as zero) in v6;
+   * in modern saves it is 1 on the GDX3 potion-modifier entries and 0 elsewhere.
    */
   unknown1: number;
   devotionLevel: number;
   devotionExperience: number;
   sublevel: number;
   active: boolean;
-  /** The byte after `active`; zero everywhere seen, kept for the same reason. */
+  /** The skill-transition byte after `active`, present in both v6 and v8. */
   unknown2: number;
   autoCastSkill: string;
   autoCastController: string;
@@ -233,8 +232,9 @@ export interface CharacterSave {
   skillReclamationPointsUsed: number;
   devotionReclamationPointsUsed: number;
   /**
-   * Block 8's two trailing words. Zero on every save seen, and genuinely u32s:
-   * decoding them at byte width yields noise, so the game wrote words.
+   * Block 8's trailing words. The saves seen have an empty item-skill array
+   * (its zero count is the first word) followed by one versioned word, also
+   * zero. They are genuinely u32s: decoding them at byte width yields noise.
    */
   skillsTail: number[];
   /** 12 equipment slots, plus 2×2 alternate weapon sets. */

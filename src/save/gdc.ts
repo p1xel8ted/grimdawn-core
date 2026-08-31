@@ -38,16 +38,19 @@ function difficultyOf(raw: number): Difficulty {
   return DIFFICULTIES[raw & 0x3] ?? 'Normal';
 }
 
+export type ItemLayout = 'legacy' | 'modern';
+
 /**
  * The item struct, shared by inventory, stash and (Stage 2) the .gst files.
  *
- * 18 fields on 1.3.0.6, not the 14 the 1.2-era specs describe: two extra words
- * sit between `relicCompletionLevel` and `stackCount`, and two more after it.
- * Verified by consumption + checksum over every item in both test characters —
- * `stackCount` lands where real stack sizes are (13 scavenged plating, 9 cracked
- * lodestone, 1 for gear), which is what pins the extras to those positions.
+ * Modern 1.3.0.6 containers carry 18 fields. Legacy character blocks carry the
+ * 14-field layout the older specs describe: `stackCount` immediately follows
+ * `relicCompletionLevel`. A live Custom Game save pins that split by checksum:
+ * block 3 v4 consumes all 3,396 bytes only at 14 fields, while block 3 v11 does
+ * so only at 18. The four absent legacy values are represented as zeroes in the
+ * common `ItemInstance` shape; they were not bytes in that file.
  */
-export function readItem(r: GdReader): ItemInstance {
+export function readItem(r: GdReader, layout: ItemLayout = 'modern'): ItemInstance {
   const baseName = r.readStr();
   const prefixName = r.readStr();
   const suffixName = r.readStr();
@@ -61,11 +64,20 @@ export function readItem(r: GdReader): ItemInstance {
   const unknown = r.readU32();
   const augmentSeed = r.readU32();
   const relicCompletionLevel = r.readU32();
-  const extra0 = r.readU32();
-  const extra1 = r.readU32();
-  const stackCount = r.readU32();
-  const extra2 = r.readU32();
-  const extra3 = r.readU32();
+  let extra0 = 0;
+  let extra1 = 0;
+  let extra2 = 0;
+  let extra3 = 0;
+  let stackCount: number;
+  if (layout === 'legacy') {
+    stackCount = r.readU32();
+  } else {
+    extra0 = r.readU32();
+    extra1 = r.readU32();
+    stackCount = r.readU32();
+    extra2 = r.readU32();
+    extra3 = r.readU32();
+  }
   return {
     baseName,
     prefixName,
@@ -95,15 +107,15 @@ export function isEmptyItem(item: ItemInstance): boolean {
  * while the personal stash stores them as floats — the same split the .gst
  * stash files have, and the classic porting bug if you assume one everywhere.
  */
-function readPositionedItem(r: GdReader, floatCoords: boolean): PositionedItem {
-  const item = readItem(r);
+function readPositionedItem(r: GdReader, floatCoords: boolean, layout: ItemLayout): PositionedItem {
+  const item = readItem(r, layout);
   const x = floatCoords ? r.readFloat() : r.readI32();
   const y = floatCoords ? r.readFloat() : r.readI32();
   return { ...item, x, y };
 }
 
-function readEquippedItem(r: GdReader): EquippedItem | null {
-  const item = readItem(r);
+function readEquippedItem(r: GdReader, layout: ItemLayout): EquippedItem | null {
+  const item = readItem(r, layout);
   const attached = r.readBool();
   return isEmptyItem(item) ? null : { ...item, attached };
 }
@@ -187,6 +199,7 @@ export function encodeBlock2(save: CharacterSave, version: number): Seg[] {
 function readBlock3(r: GdReader, s: ParseState): void {
   const version = r.readU32();
   if (version !== 11 && version !== 4) s.warn(`block 3: unexpected version ${version}`);
+  const itemLayout: ItemLayout = version < 11 ? 'legacy' : 'modern';
   const hasData = r.readBool();
   if (!hasData) return;
 
@@ -201,24 +214,25 @@ function readBlock3(r: GdReader, s: ParseState): void {
     r.readBool(); // unused
     const itemCount = r.readU32();
     const items: PositionedItem[] = [];
-    for (let j = 0; j < itemCount; j++) items.push(readPositionedItem(r, false));
+    for (let j = 0; j < itemCount; j++) items.push(readPositionedItem(r, false, itemLayout));
     finishNested(r, sackBlock, s.warn, `inventory sack ${i}`);
     sacks.push(items);
   }
   s.save.inventorySacks = sacks;
 
   s.save.alternateWeaponSetActive = r.readBool();
-  s.save.equipment = Array.from({ length: 12 }, () => readEquippedItem(r));
+  s.save.equipment = Array.from({ length: 12 }, () => readEquippedItem(r, itemLayout));
   r.readBool(); // alternate set 1 present
-  s.save.weaponSet1 = Array.from({ length: 2 }, () => readEquippedItem(r));
+  s.save.weaponSet1 = Array.from({ length: 2 }, () => readEquippedItem(r, itemLayout));
   r.readBool(); // alternate set 2 present
-  s.save.weaponSet2 = Array.from({ length: 2 }, () => readEquippedItem(r));
+  s.save.weaponSet2 = Array.from({ length: 2 }, () => readEquippedItem(r, itemLayout));
 }
 
 /** Block 4 — personal stash. Tabs are nested blocks (id 0) with float coords. */
 function readBlock4(r: GdReader, s: ParseState): void {
   const version = r.readU32();
-  if (version !== 11) s.warn(`block 4: unexpected version ${version} (expected 11)`);
+  if (version !== 11 && version !== 6) s.warn(`block 4: unexpected version ${version} (expected 6 or 11)`);
+  const itemLayout: ItemLayout = version < 11 ? 'legacy' : 'modern';
   const tabCount = r.readU32();
   const tabs: StashTab[] = [];
   for (let i = 0; i < tabCount; i++) {
@@ -228,11 +242,14 @@ function readBlock4(r: GdReader, s: ParseState): void {
     const height = r.readU32();
     const itemCount = r.readU32();
     const items: PositionedItem[] = [];
-    for (let j = 0; j < itemCount; j++) items.push(readPositionedItem(r, true));
-    // Five trailing words per tab, zero on both test characters. Not described
-    // by the 1.2-era specs; read explicitly so a change in their size surfaces
-    // as an "undecoded trailing byte(s)" warning rather than passing silently.
-    for (let j = 0; j < 5; j++) r.readU32();
+    // Legacy personal-stash coordinates are i32; modern v11 uses floats. Both
+    // are one word, so only their values (not the checksum) expose the mistake.
+    for (let j = 0; j < itemCount; j++) items.push(readPositionedItem(r, itemLayout === 'modern', itemLayout));
+    // The five zero words were added with the modern tab layout. Reading them
+    // from a v6 tab walks twenty bytes past its nested checksum.
+    if (itemLayout === 'modern') {
+      for (let j = 0; j < 5; j++) r.readU32();
+    }
     finishNested(r, tabBlock, s.warn, `stash tab ${i}`);
     tabs.push({ width, height, items });
   }
@@ -249,13 +266,16 @@ function readBlock8(r: GdReader, s: ParseState, block: BlockStart): void {
     const record = r.readStr();
     const level = r.readI32();
     const enabled = r.readBool();
-    // Not padding: 1 on exactly the 32 GDX3 potion-modifier entries of both
-    // test characters. Kept so the block can be written back byte for byte.
-    const unknown1 = r.readByte();
+    // Added by v8. Not padding: 1 on exactly the 32 GDX3 potion-modifier
+    // entries of both modern test characters. A v6 Custom Game save has no byte
+    // here; consuming one shifts every multi-byte field that follows.
+    const unknown1 = version >= 8 ? r.readByte() : 0;
     const devotionLevel = r.readI32();
     const devotionExperience = r.readI32();
     const sublevel = r.readI32();
     const active = r.readBool();
+    // Called skill-transition by the legacy format implementation; present in
+    // both v6 and v8 and kept verbatim.
     const unknown2 = r.readByte();
     skills.push({
       record,
@@ -309,7 +329,7 @@ export function encodeBlock8(save: CharacterSave, version: number): Seg[] {
     w.str(sk.record);
     w.i32(sk.level);
     w.bool(sk.enabled);
-    w.u8(sk.unknown1);
+    if (version >= 8) w.u8(sk.unknown1);
     w.i32(sk.devotionLevel);
     w.i32(sk.devotionExperience);
     w.i32(sk.sublevel);

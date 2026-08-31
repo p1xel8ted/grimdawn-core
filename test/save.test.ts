@@ -2,9 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { ChecksumError, GdReader } from '../src/save/cipher.js';
-import { GDC_MAGIC, parseGdc } from '../src/save/gdc.js';
+import { GDC_MAGIC, parseGdc, parseGdcRecording } from '../src/save/gdc.js';
 import { factionTier } from '../src/save/factions.js';
-import { GdWriter, synthBlock } from './gdwriter.js';
+import { opaqueBlocks, replay } from '../src/save/transcript.js';
+import { GdWriter, synthBlock, writeLegacyItem } from './gdwriter.js';
 import {
   CHARACTERS,
   primaryCharacter,
@@ -124,6 +125,134 @@ describe('block framing', () => {
     expect(next.id).toBe(5);
     expect(r.readU32()).toBe(0xbeef);
     expect(() => r.endBlock(next)).not.toThrow();
+  });
+});
+
+function writeLegacyEquipped(w: GdWriter, baseName = ''): void {
+  writeLegacyItem(w, { baseName });
+  w.writeBool(baseName !== '');
+}
+
+/**
+ * The three old-layout blocks found together in the live Custom Game save,
+ * reduced to one item and one skill so the format remains pinned without a
+ * game install.
+ */
+function synthLegacyCharacter(): Buffer {
+  const w = new GdWriter(0x1e9ac0de);
+  w.writeU32(GDC_MAGIC);
+  w.writeU32(2); // header version
+  w.writeWStr('Legacy');
+  w.writeByte(0); // sex
+  w.writeStr(''); // class
+  w.writeI32(5);
+  w.writeBool(false); // hardcore
+  w.writeByte(3); // expansion status
+  w.writeChecksum();
+  w.writeU32(8); // data version
+  for (let i = 0; i < 16; i++) w.writeByte(0);
+
+  const inventory = w.beginBlock(3);
+  w.writeU32(4); // legacy inventory version
+  w.writeBool(true);
+  w.writeU32(1); // sack count
+  w.writeI32(0); // focused sack
+  w.writeI32(0); // selected sack
+  const sack = w.beginBlock(0);
+  w.writeBool(false);
+  w.writeU32(1);
+  writeLegacyItem(w, { baseName: 'records/items/legacy-bag.dbr', stackCount: 7 });
+  w.writeI32(7);
+  w.writeI32(8);
+  w.endBlock(sack);
+  w.writeBool(false); // alternate set active
+  for (let i = 0; i < 12; i++) writeLegacyEquipped(w);
+  w.writeBool(false);
+  for (let i = 0; i < 2; i++) writeLegacyEquipped(w);
+  w.writeBool(false);
+  for (let i = 0; i < 2; i++) writeLegacyEquipped(w);
+  w.endBlock(inventory);
+
+  const stash = w.beginBlock(4);
+  w.writeU32(6); // legacy personal-stash version
+  w.writeU32(1);
+  const tab = w.beginBlock(0);
+  w.writeU32(10);
+  w.writeU32(10);
+  w.writeU32(1);
+  writeLegacyItem(w, { baseName: 'records/items/legacy-stash.dbr', stackCount: 2 });
+  w.writeI32(3); // legacy stash coordinates are integers
+  w.writeI32(4);
+  w.endBlock(tab); // no modern five-word tail
+  w.endBlock(stash);
+
+  const skills = w.beginBlock(8);
+  w.writeU32(6); // legacy skills version
+  w.writeU32(1);
+  w.writeStr('records/skills/legacy.dbr');
+  w.writeI32(1);
+  w.writeBool(true);
+  // No v8 byte after enabled.
+  w.writeI32(2); // devotion level
+  w.writeI32(3); // devotion experience
+  w.writeI32(4); // sublevel
+  w.writeBool(false); // active
+  w.writeBool(true); // skill transition
+  w.writeStr('');
+  w.writeStr('');
+  w.writeI32(1); // masteries allowed
+  w.writeI32(0);
+  w.writeI32(0);
+  w.writeU32(0); // item-skill count
+  w.writeU32(0); // v6 trailing word
+  w.endBlock(skills);
+  return w.toBuffer();
+}
+
+describe('legacy Custom Game blocks', () => {
+  it('parses v4/v6 layouts completely and replays them after a cipher-state shift', () => {
+    const source = synthLegacyCharacter();
+    const { save, transcript } = parseGdcRecording(source);
+
+    expect(save.warnings).toEqual([]);
+    expect(save.blocks).toEqual([
+      { id: 3, length: expect.any(Number), status: 'parsed', checksumOk: true },
+      { id: 4, length: expect.any(Number), status: 'parsed', checksumOk: true },
+      { id: 8, length: expect.any(Number), status: 'parsed', checksumOk: true },
+    ]);
+    expect(save.inventorySacks[0]?.[0]).toMatchObject({
+      baseName: 'records/items/legacy-bag.dbr',
+      stackCount: 7,
+      unknownExtra: [0, 0, 0, 0],
+      x: 7,
+      y: 8,
+    });
+    expect(save.personalStash[0]?.items[0]).toMatchObject({
+      baseName: 'records/items/legacy-stash.dbr',
+      stackCount: 2,
+      x: 3,
+      y: 4,
+    });
+    expect(save.skillEntries).toEqual([
+      {
+        record: 'records/skills/legacy.dbr',
+        level: 1,
+        enabled: true,
+        unknown1: 0,
+        devotionLevel: 2,
+        devotionExperience: 3,
+        sublevel: 4,
+        active: false,
+        unknown2: 1,
+        autoCastSkill: '',
+        autoCastController: '',
+      },
+    ]);
+    expect(opaqueBlocks(transcript)).toEqual([]);
+
+    const reseeded = replay({ ...transcript, seed: transcript.seed ^ 0xa5a5a5a5 });
+    expect(reseeded.equals(source)).toBe(false);
+    expect(parseGdc(reseeded)).toEqual(save);
   });
 });
 
