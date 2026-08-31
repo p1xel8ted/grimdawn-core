@@ -1,14 +1,13 @@
 /**
  * Where Grim Dawn keeps its saves on this machine.
  *
- * The game runs under CrossOver, so the "Windows" userdata tree lives inside the
- * Steam bottle. This is the Steam Cloud userdata path — the authoritative one;
- * the `~/Documents/My Games` location some guides mention is neither used here
- * nor reachable (TCC-protected for the shell).
- *
- * Stage 3 replaces the hardcoded default with a settings file; `GD_SAVE_DIR`
- * already overrides it today, which is what makes these parsers testable on
- * another machine.
+ * `GD_SAVE_DIR` wins, then the search, then a constant nobody should reach.
+ * That constant is the developer's own CrossOver bottle, and while it was the
+ * only fallback this function was wrong on every machine but one: `homedir()`
+ * on Windows is the user profile, so joining a macOS Application Support path
+ * onto it produced a hybrid that cannot exist. `findSaveDirs` was already
+ * right and already what both apps resolve settings through, so this is the
+ * same answer reached by the same road.
  */
 
 import { existsSync } from 'node:fs';
@@ -17,15 +16,31 @@ import { join } from 'node:path';
 
 import { documentRoots, safeReaddir, steamRoots, STEAM_APP_ID } from './platform.js';
 
+/** Last resort: a real path on the machine this was written on, and nowhere else. */
 const DEFAULT_SAVE_DIR = join(
   homedir(),
   'Library/Application Support/CrossOver/Bottles/Steam/drive_c',
   'Program Files (x86)/Steam/userdata/42909985/219990/remote/save',
 );
 
-/** Root of the save tree: contains `main/<character>/`, `user/` and the shared `.gst` files. */
+let detected: string | undefined;
+let searched = false;
+
+/**
+ * Root of the save tree: contains `main/<character>/`, `user/` and the shared
+ * `.gst` files.
+ *
+ * The search runs once and is remembered: this is the default argument of five
+ * path helpers below, and a drive scan per call is not what a caller asks for
+ * by leaving a parameter off. Drives do not appear mid-process.
+ */
 export function saveDir(): string {
-  return process.env.GD_SAVE_DIR ?? DEFAULT_SAVE_DIR;
+  if (process.env.GD_SAVE_DIR) return process.env.GD_SAVE_DIR;
+  if (!searched) {
+    detected = findSaveDirs()[0];
+    searched = true;
+  }
+  return detected ?? DEFAULT_SAVE_DIR;
 }
 
 /**
