@@ -197,10 +197,24 @@ export function backupSaves(saveDir: string, character: string): string[] {
   }
   return names
     .filter((n) => BACKUP_NAME.test(n))
-    .map((n) => join(dir, n))
-    .map((path) => ({ path, mtime: mtimeOf(path) }))
-    .sort((a, b) => b.mtime - a.mtime)
+    .map((name) => ({ name, path: join(dir, name), mtime: mtimeOf(join(dir, name)) }))
+    .sort((a, b) => b.mtime - a.mtime || rotationOf(a.name) - rotationOf(b.name))
     .map((f) => f.path);
+}
+
+/**
+ * The number in `player.gNN`, lowest first: the game writes `g00` as the most
+ * recent backup and ages the rest behind it.
+ *
+ * This is the tiebreak, and it is here because two backups written in the same
+ * millisecond otherwise come back in whatever order the directory was
+ * enumerated in. That is not cosmetic in recovery code: the caller walks this
+ * list until one parses, so an older file sorted first means quietly restoring
+ * staler state than the character actually had. Compared as a number because
+ * the name allows more than two digits, and `g10` is not older than `g2`.
+ */
+function rotationOf(name: string): number {
+  return Number(name.slice(name.lastIndexOf('.g') + 2));
 }
 
 function mtimeOf(path: string): number {

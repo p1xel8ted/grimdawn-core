@@ -74,10 +74,13 @@ function fakeWatch(): WatchBackend {
 }
 
 const temps: string[] = [];
+/** The character directory inside a synthetic tree. Only ever a name. */
+const SUBJECT_DIR = '_Suchka';
+
 function tempSaveDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'gd-watch-'));
   temps.push(dir);
-  mkdirSync(join(dir, 'main', '_Suchka'), { recursive: true });
+  mkdirSync(join(dir, 'main', SUBJECT_DIR), { recursive: true });
   return dir;
 }
 
@@ -232,6 +235,34 @@ describe.runIf(haveSaves())('save watcher', () => {
     expect(backupSaves(dir, '_Suchka').map((p) => p.slice(charDir.length + 1))).toEqual([
       'player.g01',
       'player.g00',
+    ]);
+  });
+
+  // The other half of the ordering rule. Two backups written in the same
+  // millisecond is the common case, not the exotic one, and the caller walks
+  // this list until something parses: whichever comes back first is what the
+  // character is restored to. The game writes g00 as the newest.
+  //
+  // All four are tied on purpose, and the pair that matters is g2 and g10. A
+  // same-width pair proves nothing on a filesystem that hands back names in
+  // alphabetical order, because g00 already comes first: with the tiebreak
+  // deleted entirely, an assertion on g00 and g01 alone still passes here.
+  // Lexically g10 sorts before g2, so only a numeric comparison can put the
+  // newer file first, which is what `player.g\d+` allowing a third digit means.
+  it('breaks an mtime tie on the rotation number, compared as a number', () => {
+    const dir = tempSaveDir();
+    const charDir = join(dir, 'main', SUBJECT_DIR);
+    const same = Date.now() / 1000;
+    for (const name of ['player.g10', 'player.g01', 'player.g2', 'player.g00']) {
+      writeFileSync(join(charDir, name), name);
+      utimesSync(join(charDir, name), same, same);
+    }
+
+    expect(backupSaves(dir, SUBJECT_DIR).map((p) => p.slice(charDir.length + 1))).toEqual([
+      'player.g00',
+      'player.g01',
+      'player.g2',
+      'player.g10',
     ]);
   });
 });
