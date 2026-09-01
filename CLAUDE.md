@@ -66,7 +66,7 @@ src/
 - **Inventory footprints are in the icon, and nowhere else** — no DBR field carries an item's cell size; the engine derives it from the texture at **32 px per cell**.
 - **Pet skill subtrees (`records/skills/*/pets/`) are excluded** — they are four fifths of the skill data and take `db.json` from 21 MB to 66 MB.
 - **`WANTED_PREFIXES` in `db/build.ts` is load-bearing**: a record not matching it is not in the parsed map at all. `records/creatures/pc/malepc01.dbr` must stay or base speeds silently fall back to defaults — and note `femalepc01.dbr` is *not* in the list, so anything needing it must pass its own filter to `readArz`.
-- **The cache is keyed by an archive fingerprint, not a version string** — a game patch rewrites the archives and rotates the key on its own. `defaultCacheRoot()` is shared between the apps (`~/Library/Application Support/grimdawn-core/cache`) because the cache belongs to the install, not to whoever read it; `GD_CACHE_DIR` moves it, and `GD_DATA_DIR` moves an app's data dir *and* nests the cache inside it, which is how tests isolate a whole run.
+- **The cache is keyed by an archive fingerprint, not a version string** — a game patch rewrites the archives and rotates the key on its own. `defaultCacheRoot()` is shared between the apps (`~/Library/Application Support/grimdawn-core/cache` on macOS, `%APPDATA%\grimdawn-core\cache` on Windows) because the cache belongs to the install, not to whoever read it; `GD_CACHE_DIR` moves it, and `GD_DATA_DIR` moves an app's data dir *and* nests the cache inside it, which is how tests isolate a whole run. The old macOS-shaped directory on Windows is not migrated: this is wholly derived data and rebuilds once at the native path.
 
 ## Tests
 

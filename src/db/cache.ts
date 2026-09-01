@@ -18,8 +18,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { homedir, platform as hostPlatform } from 'node:os';
+import { basename, join, win32 } from 'node:path';
 
 import { DB_SCHEMA_VERSION, type NormalizedDb } from './build.js';
 
@@ -36,10 +36,26 @@ import { DB_SCHEMA_VERSION, type NormalizedDb } from './build.js';
  * blunter instrument tests reach for: it moves an app's data dir *and* nests the
  * cache inside it, so one variable gives a run complete isolation.
  */
-export function defaultCacheRoot(): string {
-  if (process.env.GD_CACHE_DIR) return process.env.GD_CACHE_DIR;
-  if (process.env.GD_DATA_DIR) return join(process.env.GD_DATA_DIR, 'cache');
-  return join(homedir(), 'Library/Application Support/grimdawn-core/cache');
+export interface CacheRootOptions {
+  /** Injectable so every platform path is testable on every host. */
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+}
+
+export function defaultCacheRoot(opts: CacheRootOptions = {}): string {
+  const env = opts.env ?? process.env;
+  if (env.GD_CACHE_DIR) return env.GD_CACHE_DIR;
+
+  const host = opts.platform ?? hostPlatform();
+  const home = opts.home ?? homedir();
+  const pathJoin = host === 'win32' ? win32.join : join;
+  if (env.GD_DATA_DIR) return pathJoin(env.GD_DATA_DIR, 'cache');
+  if (host === 'win32') {
+    const roaming = env.APPDATA || win32.join(home, 'AppData', 'Roaming');
+    return win32.join(roaming, 'grimdawn-core', 'cache');
+  }
+  return join(home, 'Library/Application Support/grimdawn-core/cache');
 }
 
 export function cacheRoot(): string {
