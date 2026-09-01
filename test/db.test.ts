@@ -163,6 +163,47 @@ describe.skipIf(!haveGameInstall())(`game database (${haveGameInstall() ? 'live'
     expect(db.getSkill(sibling)?.mastery).toBe(bar);
   }, BUILD_TIMEOUT);
 
+  it('indexes the summoning skills a player spends points in, and still leaves the pet subtrees out', async () => {
+    const db = (await gameDb()) as NormalizedGameDb;
+
+    // Wind Devil and Wendigo Totem are ordinary Shaman buttons that happen to
+    // be spelled `Skill_TargetedSpawnPet`. A character invests in them, so the
+    // reader has to be able to look them up by name and rank.
+    for (const record of [
+      'records/skills/playerclass06/squall1.dbr',
+      'records/skills/playerclass06/totem1.dbr',
+    ]) {
+      const skill = db.getSkill(record);
+      expect(skill, record).toBeDefined();
+      expect(db.skillName(record), record).toBeTruthy();
+    }
+
+    // What the exclusion is actually for: the per-pet scaling tables, which are
+    // four fifths of the skill data and nothing a player clicks.
+    expect(Object.keys(db.raw.skills).some((r) => r.includes('/pets/'))).toBe(false);
+  }, BUILD_TIMEOUT);
+
+  it('names a pet modifier and reads its ceiling, however many pointers deep they sit', async () => {
+    const db = (await gameDb()) as NormalizedGameDb;
+
+    // These records are pure pointers - three fields and no name of their own.
+    // Raging Tempest's target carries the name and the ceiling; Blood Pact's is
+    // itself a thin activator, with both on the buff one hop further. Seven of
+    // the twenty-five player-tree pet modifiers take the longer road, so
+    // stopping at the first hop leaves a skill the character has a point in
+    // printing as its own DBR path.
+    const cases: [string, string][] = [
+      ['records/skills/playerclass06/squall2.dbr', 'Raging Tempest'],
+      ['records/skills/playerclass06/totem2_petmodifier.dbr', 'Blood Pact'],
+    ];
+    for (const [record, name] of cases) {
+      const skill = db.getSkill(record);
+      expect(skill?.name, record).toBe(name);
+      expect(skill?.maxLevel, record).toBe(12);
+      expect(skill?.ultimateLevel, record).toBe(22);
+    }
+  }, BUILD_TIMEOUT);
+
   it('parses a known record straight out of the archive', () => {
     const archives = gameArchives(findGameDir()!);
     const base = archives.find((a) => a.expansion === 'base')!;

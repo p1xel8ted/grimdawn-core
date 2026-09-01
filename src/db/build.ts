@@ -31,7 +31,7 @@ import {
 } from './types.js';
 
 /** Bump when the shape below changes so stale caches rebuild instead of misreading. */
-export const DB_SCHEMA_VERSION = 14;
+export const DB_SCHEMA_VERSION = 16;
 
 export interface NormalizedDb {
   schemaVersion: number;
@@ -321,10 +321,20 @@ const SKILL_CLASS_BAR = /\/_classtraining_[^/]*\.dbr$/i;
  * Pets are out of scope (see the stage plan's exclusion list) and they are also
  * most of the data: the `pets/` subtrees carry a per-pet copy of every summon's
  * scaling table and account for four fifths of the skill bytes on their own.
+ *
+ * The path is the whole rule. A class filter was tried and was wrong: the
+ * engine spells a summoning *button* `Skill_TargetedSpawnPet`, so a
+ * `Skill.*Pet.*` arm threw out Wind Devil, Wendigo Totem, Storm Totem, Blade
+ * Spirit, Mortar Trap, the runes and every pet modifier - skills a character
+ * spends points in, whose records sit outside `pets/` and carry the button's
+ * own name, ceiling and stats. A character with 8 points in Wendigo Totem then
+ * had no Wendigo Totem anywhere in the dossier, while the devotion bound to it
+ * still named it, and an advisor read the pair as a dead binding. Whether a
+ * summon's stats are *counted* is a separate decision and is made downstream.
  */
 const PET_SKILL_PATH = /\/pets\//;
 /** …and `SkillTree`, which is an ordered list of buttons with no stats at all. */
-const UNINDEXED_SKILL_CLASS = /^(Pet|PetPlayerScaling|SkillTree|Skill.*Pet.*)$/;
+const UNINDEXED_SKILL_CLASS = /^(Pet|PetPlayerScaling|SkillTree)$/;
 
 /** Fields on an item or affix that name a skill record worth indexing deeply. */
 const SKILL_REFERENCE_KEYS = /^(itemSkillName|augmentSkillName\d*|augmentMasteryName\d*|modifiedSkillName\d*|modifierSkillName\d*)$/;
@@ -920,6 +930,20 @@ const WEAPON_FIELDS = [
  * activator record holds nothing but the pointer, so without it Veil of Shadows
  * and every other toggle would contribute zero.
  */
+/**
+ * The record a pet modifier borrows its name and rank ceiling from.
+ *
+ * Depth-capped rather than recursive-until-done: this walks data, and a record
+ * that points at itself must not hang the build.
+ */
+function petMetadata(records: Map<string, ArzRecord>, rec: ArzRecord): ArzRecord | undefined {
+  let face = records.get(str(rec, 'petSkillName') ?? '');
+  for (let hop = 0; face && hop < 3 && !str(face, 'skillDisplayName'); hop++) {
+    face = records.get(str(face, 'buffSkillName') ?? '');
+  }
+  return face;
+}
+
 function buildSkills(
   records: Map<string, ArzRecord>,
   skillNames: Record<string, [string, string]>,
@@ -949,20 +973,34 @@ function buildSkills(
       class: str(rec, 'Class') ?? rec.type,
       stats: extractSkillStats(rec.fields),
     };
-    const name = skillNames[path]?.[0];
+    // A pet modifier is a pointer and nothing else: Raging Tempest's record
+    // holds three fields, and its name and rank ceiling sit on the pet skill it
+    // points at. Same shape as the `buffSkillName` hop below, and just as
+    // necessary - without it a skill the character has spent a point in prints
+    // as its own DBR path with no ceiling. The pet's *stats* stay out of scope.
+    //
+    // Sometimes the pet skill is a thin activator too, and the name is on the
+    // buff one further hop out - Blood Pact, Hellfire and five others, 7 of the
+    // 25 player-tree pet modifiers. So follow the pointers until one of them
+    // carries a name, rather than assuming a fixed depth. Rooted at
+    // `petSkillName` on purpose: an ordinary toggle's activator is resolved by
+    // its readers instead, and this must not quietly start answering for them.
+    const petFace = petMetadata(records, rec);
+    const name = skillNames[path]?.[0] || (petFace ? skillNames[petFace.record]?.[0] : undefined);
     if (name) skill.name = name;
 
     const assign = <K extends 'tier' | 'maxLevel' | 'ultimateLevel' | 'cooldown' | 'duration'>(
       key: K,
-      value: number | undefined,
+      field: string,
     ): void => {
+      const value = num(rec, field) ?? num(petFace, field);
       if (value !== undefined && value !== 0) skill[key] = value;
     };
-    assign('tier', num(rec, 'skillTier'));
-    assign('maxLevel', num(rec, 'skillMaxLevel'));
-    assign('ultimateLevel', num(rec, 'skillUltimateLevel'));
-    assign('cooldown', num(rec, 'skillCooldownTime'));
-    assign('duration', num(rec, 'skillActiveDuration'));
+    assign('tier', 'skillTier');
+    assign('maxLevel', 'skillMaxLevel');
+    assign('ultimateLevel', 'skillUltimateLevel');
+    assign('cooldown', 'skillCooldownTime');
+    assign('duration', 'skillActiveDuration');
 
     const buff = str(rec, 'buffSkillName');
     if (buff) skill.buffRecord = buff;
