@@ -31,7 +31,7 @@ import {
 } from './types.js';
 
 /** Bump when the shape below changes so stale caches rebuild instead of misreading. */
-export const DB_SCHEMA_VERSION = 16;
+export const DB_SCHEMA_VERSION = 17;
 
 export interface NormalizedDb {
   schemaVersion: number;
@@ -904,6 +904,12 @@ function buildMasteryNumbers(records: Map<string, ArzRecord>): Record<string, st
  * dozen or so player skills are restricted, but they are build-defining ones,
  * and advising a weapon swap that silently disables the main attack is the worst
  * answer this tool could give.
+ *
+ * The two-handed spear field is `Spear2h`, not `Spear`. 92 skill records set it
+ * and none sets `Spear`, so listing only the short name dropped every spear
+ * restriction in the game - Kraken read as "Axe2h, Mace2h, Ranged2h, Sword2h"
+ * when its record accepts a two-handed spear too. `Spear`, `Staff` and
+ * `Magical` are set by no record checked; they are left as they were.
  */
 const WEAPON_FIELDS = [
   'Axe',
@@ -918,6 +924,7 @@ const WEAPON_FIELDS = [
   'Scepter',
   'Shield',
   'Spear',
+  'Spear2h',
   'Staff',
   'Sword',
   'Sword2h',
