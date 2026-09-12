@@ -154,3 +154,38 @@ describe('rollDescriptor', () => {
     expect(d.fields).toEqual({});
   });
 });
+
+describe('the boundaries a wrong answer would slip through', () => {
+  it('refuses an item carrying a slow-flat field, which reads presence not value', () => {
+    // With a base zero and a prefix value the engine takes a different branch,
+    // and the descriptor drops zeros, so the draw count would be one out and
+    // every later field wrong. Refusing the family is the honest answer.
+    const base = rollDescriptor({ offensiveSlowFireMin: 0, defensiveAether: 100 });
+    const prefix = rollDescriptor({ offensiveSlowFireMin: 10, lootRandomizerJitter: 20 });
+    expect(replayItem(12345, base, prefix).provenance).toBe('nominal');
+  });
+
+  it('refuses a weapon, whose base physical damage is fixed rather than rolled', () => {
+    const base = rollDescriptor({ Class: 'WeaponMelee_Sword', offensivePhysicalMin: 10, offensivePhysicalMax: 20, defensiveAether: 100 });
+    expect(base.itemClass).toBe('WeaponMelee_Sword');
+    const out = replayItem(12345, base);
+    expect(out.provenance).toBe('nominal');
+    expect(out.reason).toContain('WeaponMelee_Sword');
+  });
+
+  it('refuses an off-hand and a relic for the same reason', () => {
+    expect(replayItem(12345, rollDescriptor({ Class: 'ArmorProtective_Offhand', defensiveAether: 100 })).provenance).toBe('nominal');
+    expect(replayItem(12345, rollDescriptor({ Class: 'ItemRelic', defensiveAether: 100 })).provenance).toBe('nominal');
+  });
+
+  it('refuses when a fourth source is present, which it does not model', () => {
+    const out = replayItem(12345, rollDescriptor({ defensiveAether: 100 }), undefined, undefined, { hasModifier: true });
+    expect(out.provenance).toBe('nominal');
+    expect(out.reason).toContain('fourth source');
+  });
+
+  it('still replays an ordinary armour piece', () => {
+    const out = replayItem(12345, rollDescriptor({ Class: 'ArmorProtective_Chest', defensiveAether: 100 }));
+    expect(out.provenance).toBe('seed-replayed');
+  });
+});

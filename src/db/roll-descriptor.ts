@@ -101,8 +101,10 @@ export function rollDescriptor(fields: Readonly<Record<string, unknown>>): RollD
   }
 
   const jitter = numeric(fields['lootRandomizerJitter']);
+  const itemClass = typeof fields['Class'] === 'string' ? fields['Class'] : undefined;
   return {
     fields: kept,
+    ...(itemClass ? { itemClass } : {}),
     ...(jitter ? { jitter } : {}),
     ...(unsupported.length ? { unsupported: unsupported.sort() } : {}),
   };

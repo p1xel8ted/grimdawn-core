@@ -86,7 +86,14 @@ export const rollSources = (kind: RollKind): readonly ('prefix' | 'suffix' | 'ba
  * miscounted draw corrupts every value after it - including the resistances
  * this module exists to produce.
  */
-export const UNMODELLED_KINDS: ReadonlySet<RollKind> = new Set(['Skill', 'Conv', 'OffSlow', 'RetalDur', 'RetalReflex', 'OffReflex', 'OffReduc']);
+export const UNMODELLED_KINDS: ReadonlySet<RollKind> = new Set([
+  'Skill', 'Conv', 'OffSlow', 'RetalDur', 'RetalReflex', 'OffReflex', 'OffReduc',
+  // SlowFlat reads presence rather than value: a source carrying the field at
+  // an explicit zero changes which branch runs, and the descriptor drops zeros.
+  // Keeping the zero would mean carrying presence for every field on every
+  // record, so the family is refused instead.
+  'SlowFlat',
+]);
 
 /** Base records carry no jitter field of their own; the engine uses this. */
 export const BASE_JITTER_PERCENT = 20;
@@ -95,8 +102,14 @@ export const BASE_JITTER_PERCENT = 20;
 export type RollProvenance = 'seed-replayed' | 'nominal';
 
 export interface RollDescriptor {
-  /** Draw-affecting field values, including explicit zeros where they matter. */
+  /** Draw-affecting field values. Zeros are dropped: a zero never draws. */
   readonly fields: Readonly<Record<string, number>>;
+  /**
+   * The record's `Class`, which decides draws rather than describing the item:
+   * a weapon's base physical damage is fixed instead of rolled, and an off-hand
+   * skips sources entirely.
+   */
+  readonly itemClass?: string;
   /** `lootRandomizerJitter` on an affix; absent on a base record. */
   readonly jitter?: number;
   /** Non-empty when the record carries something the traversal does not model. */
@@ -119,11 +132,20 @@ export interface ReplayResult {
  * is wrong. So anything unexpected returns the record's own values with
  * `nominal` provenance and a reason, rather than a partly-right answer.
  */
+/** Classes whose draw path differs in ways this module does not reproduce. */
+const REFUSED_CLASS = /^(Weapon|.*Offhand|ItemRelic|ItemArtifact)/i;
+
+export interface ReplayContext {
+  /** True when the instance carries a rare-monster modifier or a completion bonus. */
+  readonly hasModifier?: boolean;
+}
+
 export function replayItem(
   seed: number,
   base: RollDescriptor | undefined,
   prefix?: RollDescriptor,
   suffix?: RollDescriptor,
+  context: ReplayContext = {},
 ): ReplayResult {
   // No values on fallback. Spreading the three sources together would let a
   // later one overwrite an earlier one on a shared key - the ring's 30 base and
@@ -133,6 +155,10 @@ export function replayItem(
   const nominal = (reason: string): ReplayResult => ({ values: {}, provenance: 'nominal', reason });
 
   if (!base) return nominal('no roll metadata for the base record');
+  // A weapon holds its base physical damage fixed and an off-hand skips whole
+  // sources, so the draw count differs before any field is read.
+  if (base.itemClass && REFUSED_CLASS.test(base.itemClass)) return nominal(`class ${base.itemClass} draws differently`);
+  if (context.hasModifier) return nominal('a modifier or completion bonus is a fourth source, which is not modelled');
   for (const [label, d] of [['base', base], ['prefix', prefix], ['suffix', suffix]] as const) {
     if (d?.unsupported?.length) return nominal(`${label} record carries unmodelled field ${d.unsupported[0]}`);
   }
