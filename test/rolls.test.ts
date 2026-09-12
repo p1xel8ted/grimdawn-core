@@ -239,6 +239,39 @@ describe('the boundaries a wrong answer would slip through', () => {
     expect(replayItem(12345, base, rollDescriptor(SLOW_PREFIX)).values['defensiveAether']).toBe(107);
   });
 
+  it('omits a resistance two sources cancel to zero', () => {
+    // The reason a consumer must strip every supported key rather than only the
+    // ones the replay hands back. Base +20 and prefix -20 Fire roll to a
+    // combined 0 at this seed, so no key comes out, and a consumer that kept
+    // the record's +20 for the missing key would put back the exact number the
+    // rolls cancelled. Reference agrees at 0, and the draws are still spent:
+    // Aether reads 89 rather than the 107 it takes with no Fire on the item.
+    const base = rollDescriptor({ defensiveFire: 20, defensiveAether: 100 });
+    const prefix = rollDescriptor({ defensiveFire: -20, lootRandomizerJitter: 20 });
+    const out = replayItem(258, base, prefix);
+    expect(out.provenance).toBe('seed-replayed');
+    expect(out.values['defensiveFire']).toBeUndefined();
+    expect(out.values['defensiveAether']).toBe(89);
+  });
+
+  it('gives two copies of one record different resistances', () => {
+    // The point of the whole exercise: the seed, not the record, decides.
+    const base = rollDescriptor({ defensiveAether: 100 });
+    const a = replayItem(12345, base).values['defensiveAether'];
+    const b = replayItem(999331, base).values['defensiveAether'];
+    expect(a).not.toBe(b);
+  });
+
+  it('sums three sources into one figure for a shared resistance', () => {
+    const base = rollDescriptor({ defensiveChaos: 30 });
+    const prefix = rollDescriptor({ defensiveChaos: 18, lootRandomizerJitter: 18 });
+    const suffix = rollDescriptor({ defensiveChaos: 25, lootRandomizerJitter: 10 });
+    const out = replayItem(12345, base, prefix, suffix).values['defensiveChaos'] ?? 0;
+    // One combined figure near the nominal 73, not any single source's roll.
+    expect(out).toBeGreaterThan(60);
+    expect(out).toBeLessThan(86);
+  });
+
   it('reports the same resistances whether or not a record converts', () => {
     // Conversion is drawn after every reported resistance, so adding it to an
     // otherwise identical record must not move one.

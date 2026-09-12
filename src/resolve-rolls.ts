@@ -1,11 +1,11 @@
 /**
  * The seed-replayed resistances for one saved item, when they can be had.
  *
- * Deliberately not part of `resolveItem`. Resolution is the path every consumer
- * already takes and its numbers are the record's own; this is an opt-in beside
- * it, so nothing changes for a caller that does not ask. A caller that does ask
- * gets a per-instance result it can use *instead of* the nominal resistances,
- * never merged into them, and a provenance saying which it received.
+ * Resolution's numbers are the record's own, and these are not, so this stays
+ * opt in: `resolveItem` calls it only when a caller passes `rolls`, and nothing
+ * changes for one that does not. A caller that does ask gets a per-instance
+ * result it can use *instead of* the nominal resistances, never merged into
+ * them, and a provenance saying which it received.
  */
 
 import { replayItem, type ReplayResult } from './db/rolls.js';

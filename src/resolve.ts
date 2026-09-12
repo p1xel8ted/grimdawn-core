@@ -6,13 +6,17 @@
  * component, `augmentName` the applied augment. Every display name, stat and icon
  * comes from the game database keyed on those paths.
  *
- * What this deliberately does *not* do is re-roll the seed. Reproducing the
- * engine's affix rolls would mean reimplementing its RNG; the advisor works from
- * base stats plus named affixes, and the context document labels those numbers as
- * the base values they are.
+ * By default this does not re-roll the seed: every number is the record's own,
+ * which is the middle of the range rather than the roll on this copy. Pass
+ * `rolls` and each saved instance also carries `rolled`, the seed replay of its
+ * base and affix resistances, for a caller that wants the figures the game
+ * actually gave this item. Nothing else changes, and a caller that does not ask
+ * sees exactly what it saw before.
  */
 
 import type { DbAffix, DbItem, GameDb } from './db/types.js';
+import type { ReplayResult } from './db/rolls.js';
+import { replayItemResistances } from './resolve-rolls.js';
 import type { FormulasFile, MaterialStore } from './save/gst.js';
 import type { TransferStash } from './save/gst.js';
 import {
@@ -41,6 +45,18 @@ export interface ItemRequirements {
   physique?: number;
   cunning?: number;
   spirit?: number;
+}
+
+export interface ResolveOptions {
+  /**
+   * Replay each saved instance's own resistances from its seed and attach the
+   * result as `rolled`.
+   *
+   * Off by default. The replay covers the base, prefix and suffix only, refuses
+   * whole categories of item, and is a different kind of number from the rest
+   * of resolution, so a caller has to ask for it rather than discover it.
+   */
+  readonly rolls?: boolean;
 }
 
 export interface ResolvedItem {
@@ -91,6 +107,18 @@ export interface ResolvedItem {
   stackCount: number;
   /** Record paths that did not resolve — the raw material of the coverage report. */
   unresolved: string[];
+  /**
+   * The seed replay of this copy's base, prefix and suffix resistances, when
+   * the caller asked for it.
+   *
+   * Present with `provenance: 'nominal'` and a reason when the replay was asked
+   * for and refused, so a consumer can say which items it could not reconstruct
+   * rather than silently mixing the two. Absent entirely when nobody asked.
+   *
+   * It covers those three sources and no others: a component, an augment, a
+   * completion bonus and a set bonus are all still the record's own numbers.
+   */
+  rolled?: ReplayResult;
 }
 
 export interface ResolutionCoverage {
@@ -141,6 +169,7 @@ export function resolveItem(
   location: string,
   track?: CoverageTracker,
   position: ItemPosition = { kind: 'materials' },
+  options: ResolveOptions = {},
 ): ResolvedItem {
   const unresolved: string[] = [];
 
@@ -202,6 +231,10 @@ export function resolveItem(
   if (component) item.component = component;
   if (augment) item.augment = augment;
   if (base) item.requirements = requirements(base, prefix.affix, suffix.affix);
+  // Attached rather than folded in: these numbers replace the base and affix
+  // resistances, they do not add to them, and only a caller that knows that can
+  // use them safely.
+  if (options.rolls) item.rolled = replayItemResistances(inst, db);
   return item;
 }
 
@@ -385,6 +418,7 @@ export function resolveCharacter(
   account: AccountFiles,
   db: GameDb,
   track: CoverageTracker = new CoverageTracker(),
+  options: ResolveOptions = {},
 ): ResolvedCharacter {
   const { stash, formulas, materials } = account;
   const items: ResolvedItem[] = [];
@@ -392,7 +426,7 @@ export function resolveCharacter(
   save.equipment.forEach((item, i) => {
     if (item) {
       items.push(
-        resolveItem(item, db, 'equipped', EQUIP_SLOT_NAMES[i] ?? `Slot ${i}`, track, { kind: 'equipment', slot: i }),
+        resolveItem(item, db, 'equipped', EQUIP_SLOT_NAMES[i] ?? `Slot ${i}`, track, { kind: 'equipment', slot: i }, options),
       );
     }
   });
@@ -404,7 +438,7 @@ export function resolveCharacter(
     weapons.forEach((weapon, i) => {
       const hand = i === 0 ? 'main' : 'off';
       if (weapon) {
-        items.push(resolveItem(weapon, db, 'equipped', `${label} ${hand}`, track, { kind: 'weapon', set, hand }));
+        items.push(resolveItem(weapon, db, 'equipped', `${label} ${hand}`, track, { kind: 'weapon', set, hand }, options));
       }
     });
   }
@@ -417,7 +451,7 @@ export function resolveCharacter(
           sack: i,
           x: item.x,
           y: item.y,
-        }),
+        }, options),
       );
     }
   });
@@ -430,7 +464,7 @@ export function resolveCharacter(
           tab: i,
           x: Math.round(item.x),
           y: Math.round(item.y),
-        }),
+        }, options),
       );
     }
   });
@@ -443,7 +477,7 @@ export function resolveCharacter(
           tab: i,
           x: Math.round(item.x),
           y: Math.round(item.y),
-        }),
+        }, options),
       );
     }
   });
@@ -455,6 +489,9 @@ export function resolveCharacter(
     // materials pool — because a save's own `stackCount` is 0 for
     // non-stackables and every consumer floors it at 1.
     if (entry.quantity < 1) continue;
+    // No `options` here on purpose: a materials row is a count of a record the
+    // account holds, not a copy that dropped with a seed, so there is no roll
+    // to reconstruct and it must not be presented as one.
     items.push(
       resolveItem(materialInstance(entry.record, entry.quantity), db, 'materials', 'materials store', track),
     );
