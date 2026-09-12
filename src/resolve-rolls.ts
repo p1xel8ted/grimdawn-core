@@ -17,9 +17,10 @@ import type { ItemInstance } from './save/types.js';
  *
  * **These replace the base, prefix and suffix contributions only.** A worn
  * item's resistances also come from its component, its augment, a completion
- * bonus and a set, and none of those are here: they do not roll, and the caller
- * adds them exactly as it does today. Treating the returned figures as the
- * item's whole resistance would quietly drop everything socketed into it.
+ * bonus and a set. Those are outside this function, not shown to be fixed: the
+ * caller keeps handling them exactly as it does today, at their record values.
+ * Treating the returned figures as the item's whole resistance would quietly
+ * drop everything socketed into it.
  *
  * Falls back to `nominal` with a reason whenever anything is unknown: an
  * unindexed record, an affix we failed to read, a class whose draws differ, or
