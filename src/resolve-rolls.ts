@@ -15,6 +15,12 @@ import type { ItemInstance } from './save/types.js';
 /**
  * Replay one instance's resistances.
  *
+ * **These replace the base, prefix and suffix contributions only.** A worn
+ * item's resistances also come from its component, its augment, a completion
+ * bonus and a set, and none of those are here: they do not roll, and the caller
+ * adds them exactly as it does today. Treating the returned figures as the
+ * item's whole resistance would quietly drop everything socketed into it.
+ *
  * Falls back to `nominal` with a reason whenever anything is unknown: an
  * unindexed record, an affix we failed to read, a class whose draws differ, or
  * a fourth source. The caller keeps its own nominal figures in that case, which
@@ -24,12 +30,15 @@ export function replayItemResistances(inst: ItemInstance, db: GameDb): ReplayRes
   const base = db.getItem(inst.baseName);
   if (!base) return { values: {}, provenance: 'nominal', reason: `no record for ${inst.baseName || '(empty)'}` };
 
-  // An affix named by the save but missing from the index is not the same as no
-  // affix: its draws happened, we just cannot see them.
+  // An affix named by the save is a source whose draws happened. Not finding
+  // its record, or finding one with no roll metadata, are the same problem: we
+  // cannot see those draws, and replaying without them silently drops a whole
+  // source rather than failing. Only an affix the save does not name is absent.
   for (const record of [inst.prefixName, inst.suffixName]) {
-    if (record && !db.getAffix(record)) {
-      return { values: {}, provenance: 'nominal', reason: `affix ${record} is not in the database` };
-    }
+    if (!record) continue;
+    const found = db.getAffix(record);
+    if (!found) return { values: {}, provenance: 'nominal', reason: `affix ${record} is not in the database` };
+    if (!found.rolls) return { values: {}, provenance: 'nominal', reason: `affix ${record} has no roll metadata` };
   }
 
   const affix = (record: string) => (record ? db.getAffix(record)?.rolls : undefined);

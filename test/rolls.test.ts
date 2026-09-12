@@ -1,8 +1,17 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+import { readCachedDb, writeCachedDb } from '../src/db/cache.js';
+import { DB_SCHEMA_VERSION, type NormalizedDb } from '../src/db/build.js';
 
 import { BASE_JITTER_PERCENT, REPLAYED_RESISTANCES, replayItem, rollKeys, rollSources, type RollDescriptor } from '../src/db/rolls.js';
 import { ROLL_ORDER } from '../src/db/roll-order.js';
 import { rollDescriptor } from '../src/db/roll-descriptor.js';
+import { replayItemResistances } from '../src/resolve-rolls.js';
+import type { GameDb } from '../src/db/types.js';
+import type { ItemInstance } from '../src/save/types.js';
 
 /** The live ring this was derived against: seed, records and the game's own numbers. */
 const RING = {
@@ -205,15 +214,7 @@ describe('what the replay hands back', () => {
   });
 });
 
-describe('the descriptor across the database cache', () => {
-  it('survives being written and read back as JSON', () => {
-    // The descriptor is only useful if it reaches a later run intact; the cache
-    // is JSON, so anything the round trip drops is silently a fallback.
-    const before = rollDescriptor({ Class: 'ArmorProtective_Chest', defensiveAether: 18, someNewStat: 4, lootRandomizerJitter: 18 });
-    const after = JSON.parse(JSON.stringify(before)) as typeof before;
-    expect(after).toEqual(before);
-    expect(replayItem(RING.seed, after).provenance).toBe(replayItem(RING.seed, before).provenance);
-  });
+describe('a record with no descriptor', () => {
 
   it('treats a record with no descriptor as unreplayable rather than as empty', () => {
     // A DbItem built in code, or one read from a cache written before the
@@ -222,15 +223,106 @@ describe('the descriptor across the database cache', () => {
     expect(replayItem(RING.seed, undefined).provenance).toBe('nominal');
   });
 
-  it('tells a missing affix apart from an affix with nothing to roll', () => {
-    // An item genuinely without a prefix, and an item whose prefix record we
-    // failed to index, must not look the same: the first is replayable.
-    const noPrefix = replayItem(RING.seed, RING.base);
-    const emptyPrefix = replayItem(RING.seed, RING.base, { fields: {} });
-    expect(noPrefix.provenance).toBe('seed-replayed');
-    expect(emptyPrefix.provenance).toBe('seed-replayed');
-    expect(emptyPrefix.values).toEqual(noPrefix.values);
-    // …whereas one that carries something unmodelled refuses.
-    expect(replayItem(RING.seed, RING.base, { fields: {}, unsupported: ['x'] }).provenance).toBe('nominal');
+});
+
+describe('replayItemResistances, through a database', () => {
+  const armour = (rolls?: unknown) => ({ record: 'r/base.dbr', name: 'Coat', levelReq: 1, rarity: 'Rare', slot: 'ArmorProtective_Chest', iconPath: '', stats: {}, ...(rolls ? { rolls } : {}) });
+  const stub = (opts: { base?: unknown; affix?: unknown; affixKnown?: boolean }) =>
+    ({
+      getItem: (r: string) => (r === 'r/base.dbr' ? opts.base : undefined),
+      getAffix: (r: string) => (r === 'r/pfx.dbr' && opts.affixKnown !== false ? opts.affix : undefined),
+    }) as unknown as GameDb;
+  const inst = (prefixName = '') =>
+    ({ baseName: 'r/base.dbr', prefixName, suffixName: '', modifierName: '', relicBonus: '', seed: 12345 }) as ItemInstance;
+
+  it('replays an item whose base is indexed and which names no affix', () => {
+    const out = replayItemResistances(inst(), stub({ base: armour(rollDescriptor({ defensiveAether: 100 })) }));
+    expect(out.provenance).toBe('seed-replayed');
+    expect(out.values['defensiveAether']).toBeGreaterThan(0);
+  });
+
+  it('declines when the base record is not in the database', () => {
+    const out = replayItemResistances({ ...inst(), baseName: 'r/missing.dbr' }, stub({}));
+    expect(out.provenance).toBe('nominal');
+    expect(out.reason).toContain('no record');
+  });
+
+  it('declines when the base record has no roll metadata', () => {
+    // A DbItem built in code, or read from a cache written before descriptors
+    // existed. Replaying it would be replaying draws we never saw.
+    const out = replayItemResistances(inst(), stub({ base: armour() }));
+    expect(out.provenance).toBe('nominal');
+    expect(out.reason).toContain('no roll metadata');
+  });
+
+  it('declines when a named affix has no roll metadata, rather than dropping the source', () => {
+    // The affix record exists, so an existence check passes; without its
+    // metadata the replay would run as though the item had no prefix at all
+    // and quietly lose every draw that prefix made.
+    const out = replayItemResistances(inst('r/pfx.dbr'), stub({
+      base: armour(rollDescriptor({ defensiveAether: 100 })),
+      affix: { record: 'r/pfx.dbr', stats: {} },
+    }));
+    expect(out.provenance).toBe('nominal');
+    expect(out.reason).toContain('no roll metadata');
+  });
+
+  it('declines when a named affix is not in the database at all', () => {
+    const out = replayItemResistances(inst('r/pfx.dbr'), stub({
+      base: armour(rollDescriptor({ defensiveAether: 100 })), affixKnown: false,
+    }));
+    expect(out.provenance).toBe('nominal');
+    expect(out.reason).toContain('not in the database');
+  });
+
+  it('a named affix with metadata changes the answer, which is why the others must decline', () => {
+    const withAffix = replayItemResistances(inst('r/pfx.dbr'), stub({
+      base: armour(rollDescriptor({ defensiveAether: 100 })),
+      affix: { record: 'r/pfx.dbr', stats: {}, rolls: rollDescriptor({ defensiveAether: 40, lootRandomizerJitter: 20 }) },
+    }));
+    const without = replayItemResistances(inst(), stub({ base: armour(rollDescriptor({ defensiveAether: 100 })) }));
+    expect(withAffix.provenance).toBe('seed-replayed');
+    expect(withAffix.values['defensiveAether']).not.toBe(without.values['defensiveAether']);
+  });
+});
+
+describe('roll metadata through the real cache', () => {
+  const withCacheDir = <T>(fn: () => T): T => {
+    const dir = mkdtempSync(join(tmpdir(), 'gd-rollcache-'));
+    const had = process.env['GD_CACHE_DIR'];
+    process.env['GD_CACHE_DIR'] = dir;
+    try { return fn(); } finally {
+      if (had === undefined) delete process.env['GD_CACHE_DIR']; else process.env['GD_CACHE_DIR'] = had;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const db = (schemaVersion: number): NormalizedDb =>
+    ({
+      schemaVersion, gameVersion: 'v1.3.0.8', locale: 'en', locales: ['en'], fingerprint: 'rolltest',
+      builtAt: new Date().toISOString(), archives: [], sets: {}, skills: {}, l10n: {},
+      items: { 'r/base.dbr': { record: 'r/base.dbr', name: 'Coat', levelReq: 1, rarity: 'Rare', slot: 'ArmorProtective_Chest', iconPath: '', stats: {}, rolls: rollDescriptor({ Class: 'ArmorProtective_Chest', defensiveAether: 18, someNewStat: 4 }) } },
+      affixes: { 'r/pfx.dbr': { record: 'r/pfx.dbr', stats: {}, rolls: rollDescriptor({ defensiveFire: 20, lootRandomizerJitter: 18 }) } },
+    }) as unknown as NormalizedDb;
+
+  it('keeps the fields, the class, the jitter and the refusal note across a write and read', () => {
+    withCacheDir(() => {
+      writeCachedDb(db(DB_SCHEMA_VERSION));
+      const back = readCachedDb('rolltest', 'en');
+      expect(back).toBeDefined();
+      const item = back!.items['r/base.dbr']!;
+      expect(item.rolls?.fields).toEqual({ defensiveAether: 18 });
+      expect(item.rolls?.itemClass).toBe('ArmorProtective_Chest');
+      expect(item.rolls?.unsupported).toEqual(['someNewStat']);
+      expect(back!.affixes['r/pfx.dbr']!.rolls?.jitter).toBe(18);
+    });
+  });
+
+  it('rejects a database written before the descriptor existed', () => {
+    // Reading an 18 back would give items with no metadata, which is not
+    // distinguishable from items with nothing to roll.
+    withCacheDir(() => {
+      writeCachedDb(db(18));
+      expect(readCachedDb('rolltest', 'en')).toBeUndefined();
+    });
   });
 });
