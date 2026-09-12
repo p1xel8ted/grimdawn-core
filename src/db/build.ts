@@ -29,6 +29,7 @@ import {
   type CombatFormulas,
   type StatValue,
 } from './types.js';
+import { SLOT_FLAG_KEYS } from './slot-flags.js';
 
 /** Bump when the shape below changes so stale caches rebuild instead of misreading. */
 export const DB_SCHEMA_VERSION = 18;
@@ -453,39 +454,6 @@ const NON_STAT_KEYS = new Set<string>([
   'marketAdjustmentPercent',
 ]);
 
-/**
- * Use-on slot flags on component (`ItemRelic`) and augment (`ItemEnchantment`)
- * records — boolean template fields, value 1 when the socketable fits that gear
- * family, spelled out at zero (and so dropped) otherwise. Verified against the
- * installed archives: exactly these 23 keys occur, only on those two classes,
- * never with a value other than 1. They move to `DbItem.allowedSlots` rather
- * than staying in `stats`, where they would read as junk stat lines.
- */
-const SLOT_FLAG_KEYS = [
-  'amulet',
-  'medal',
-  'ring',
-  'head',
-  'chest',
-  'shoulders',
-  'hands',
-  'legs',
-  'feet',
-  'waist',
-  'offhand',
-  'shield',
-  'sword',
-  'sword2h',
-  'axe',
-  'axe2h',
-  'mace',
-  'mace2h',
-  'dagger',
-  'scepter',
-  'spear2h',
-  'ranged1h',
-  'ranged2h',
-] as const;
 
 const SOCKETABLE_CLASSES = new Set(['ItemRelic', 'ItemEnchantment']);
 

@@ -16,5 +16,7 @@
     "noEmit": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "//exclude": "test/fixtures/ is git-ignored scratch - copies of game data and one-off experiment scripts. It is not part of the package and must not fail the typecheck.",
+  "exclude": ["test/fixtures/**"]
 }
