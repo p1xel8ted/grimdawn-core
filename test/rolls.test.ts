@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BASE_JITTER_PERCENT, replayItem, rollKeys, rollSources, type RollDescriptor } from '../src/db/rolls.js';
 import { ROLL_ORDER } from '../src/db/roll-order.js';
+import { rollDescriptor } from '../src/db/roll-descriptor.js';
 
 /** The live ring this was derived against: seed, records and the game's own numbers. */
 const RING = {
@@ -42,8 +43,13 @@ describe('rollKeys', () => {
 });
 
 describe('rollSources', () => {
-  it('draws the base last for the kinds that do', () => {
+  it('draws the base last only for the two kinds that do', () => {
     expect(rollSources('Char')).toEqual(['prefix', 'suffix', 'base']);
+    expect(rollSources('Skill')).toEqual(['prefix', 'suffix', 'base']);
+    // RetalMod reads base-first in the scalar branch, despite sitting beside
+    // Char in the store list; an earlier version of this test asserted the
+    // opposite and was asserting the implementation rather than the engine.
+    expect(rollSources('RetalMod')).toEqual(['base', 'prefix', 'suffix']);
     expect(rollSources('Def')).toEqual(['base', 'prefix', 'suffix']);
   });
 });
@@ -71,14 +77,29 @@ describe('replayItem', () => {
     const out = replayItem(RING.seed, RING.base, { ...RING.prefix, unsupported: ['somethingNew'] }, RING.suffix);
     expect(out.provenance).toBe('nominal');
     expect(out.reason).toContain('somethingNew');
-    // The nominal answer is the record's own value, not a half-rolled one.
-    expect(out.values['defensiveAether']).toBe(18);
+  });
+
+  it('returns no values when it falls back, rather than a wrong aggregate', () => {
+    // The ring's physical modifier is 30 on the base and 45 on the suffix. Any
+    // fallback that merged the sources by key would report 45 and lose the 30;
+    // the caller already holds a correct nominal sum, so this one says nothing.
+    const out = replayItem(0, RING.base, RING.prefix, RING.suffix);
+    expect(out.provenance).toBe('nominal');
+    expect(out.values).toEqual({});
+    expect(RING.base.fields['offensivePhysicalModifier']).toBe(30);
+    expect(RING.suffix.fields['offensivePhysicalModifier']).toBe(45);
+  });
+
+  it('keeps a negative value negative rather than rolling it the wrong way', () => {
+    // A drawback like -20% resistance truncates to a negative spread. Flooring
+    // and clamping to 1 instead would roll it as though it were a small bonus.
+    const out = replayItem(RING.seed, { fields: { defensiveFire: -20 } });
+    expect(out.provenance).toBe('seed-replayed');
+    expect(out.values['defensiveFire']).toBeLessThan(0);
   });
 
   it('falls back on seed 0 rather than handing out its minimums', () => {
-    const out = replayItem(0, RING.base, RING.prefix, RING.suffix);
-    expect(out.provenance).toBe('nominal');
-    expect(out.reason).toContain('fixed point');
+    expect(replayItem(0, RING.base).reason).toContain('fixed point');
   });
 
   it('falls back when the base record has no roll metadata', () => {
@@ -95,5 +116,41 @@ describe('replayItem', () => {
     const flat = replayItem(RING.seed, { fields: { defensiveFire: 100 } });
     expect(flat.values['defensiveFire']).toBeGreaterThanOrEqual(80);
     expect(flat.values['defensiveFire']).toBeLessThanOrEqual(120);
+  });
+});
+
+describe('rollDescriptor', () => {
+  it('keeps the draw-affecting fields and drops the zeros that cannot draw', () => {
+    const d = rollDescriptor({ defensiveAether: 18, defensiveChaos: 0, mesh: 'items/x.msh', lootRandomizerJitter: 18 });
+    expect(d.fields).toEqual({ defensiveAether: 18 });
+    expect(d.jitter).toBe(18);
+    expect(d.unsupported).toBeUndefined();
+  });
+
+  it('passes over the stats the engine carries through without rolling', () => {
+    // defensiveProtection is every armour piece's rating; treating it as an
+    // unknown would refuse most of a character's gear.
+    expect(rollDescriptor({ defensiveProtection: 1570, characterManaRegen: 3 }).unsupported).toBeUndefined();
+  });
+
+  it('refuses a record carrying a kind whose draws are not modelled', () => {
+    expect(rollDescriptor({ conversionInType: 'Physical', conversionPercentage: 100 }).unsupported).toContain('conversionInType');
+    expect(rollDescriptor({ offensiveSlowBleedingDurationMin: 3 }).unsupported).toContain('offensiveSlowBleedingDurationMin');
+  });
+
+  it('refuses an unknown numeric field rather than assuming it is harmless', () => {
+    expect(rollDescriptor({ someNewStat: 12 }).unsupported).toEqual(['someNewStat']);
+  });
+
+  it('ignores an unknown field that is only present at zero', () => {
+    // Records carry the whole template, so nearly every field is present and
+    // zero. A zero draws nothing, so refusing on presence would refuse all gear.
+    expect(rollDescriptor({ someNewStat: 0 }).unsupported).toBeUndefined();
+  });
+
+  it('ignores description, art and slot restrictions', () => {
+    const d = rollDescriptor({ bitmap: 'a.tex', armorMaleMesh: 'b.msh', head: 1, untradeable: 1, itemNameTag: 'tagX' });
+    expect(d.unsupported).toBeUndefined();
+    expect(d.fields).toEqual({});
   });
 });

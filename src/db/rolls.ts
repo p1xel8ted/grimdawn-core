@@ -44,8 +44,14 @@ class Stream {
  */
 function rollValue(value: number, jitterPercent: number, draw: () => number): number {
   if (value === 0 || jitterPercent === 0) return value;
-  const spread = Math.max(1, Math.floor((value * jitterPercent) / 100));
-  const rolled = (draw() % (2 * spread + 1)) - spread + value;
+  // Truncated, not floored: a negative value keeps a negative spread, and only
+  // an exactly-zero spread is widened to one. Flooring instead would turn every
+  // small negative into a spread of 1 and roll a drawback the wrong way.
+  let spread = Math.trunc(value * jitterPercent * 0.01);
+  if (spread === 0) spread = 1;
+  let modulus = 2 * spread + 1;
+  if (modulus === 0) modulus = 1;
+  const rolled = (draw() % modulus) - spread + value;
   return Math.abs(rolled) < 1 ? value : rolled;
 }
 
@@ -61,10 +67,26 @@ export function rollKeys(kind: RollKind, field: string): readonly string[] {
   }
 }
 
-/** Which sources a kind draws from, in order. Base is last for these three. */
-const BASE_LAST = new Set<RollKind>(['Char', 'Skill', 'RetalMod']);
+/**
+ * Which sources a kind draws from, in order.
+ *
+ * Only `Char` and `Skill` put the base last; everything else, `RetalMod`
+ * included, draws base first.
+ */
+const BASE_LAST = new Set<RollKind>(['Char', 'Skill']);
 export const rollSources = (kind: RollKind): readonly ('prefix' | 'suffix' | 'base')[] =>
   BASE_LAST.has(kind) ? ['prefix', 'suffix', 'base'] : ['base', 'prefix', 'suffix'];
+
+/**
+ * Kinds whose draw semantics this module does not reproduce yet.
+ *
+ * Skill and conversion use their own jitter rules, affix skill fields are drawn
+ * before the main walk, and the slow families pair a modifier with a duration.
+ * Any of those on a record makes the whole item unreplayable, because a
+ * miscounted draw corrupts every value after it - including the resistances
+ * this module exists to produce.
+ */
+export const UNMODELLED_KINDS: ReadonlySet<RollKind> = new Set(['Skill', 'Conv', 'OffSlow', 'RetalDur', 'RetalReflex', 'OffReflex', 'OffReduc']);
 
 /** Base records carry no jitter field of their own; the engine uses this. */
 export const BASE_JITTER_PERCENT = 20;
@@ -103,11 +125,12 @@ export function replayItem(
   prefix?: RollDescriptor,
   suffix?: RollDescriptor,
 ): ReplayResult {
-  const nominal = (reason: string): ReplayResult => ({
-    values: { ...(base?.fields ?? {}), ...(prefix?.fields ?? {}), ...(suffix?.fields ?? {}) },
-    provenance: 'nominal',
-    reason,
-  });
+  // No values on fallback. Spreading the three sources together would let a
+  // later one overwrite an earlier one on a shared key - the ring's 30 base and
+  // 45 suffix physical modifier collapsing to 45 rather than summing - and the
+  // caller already holds a correct nominal aggregate. Saying nothing is the
+  // only honest answer this function can give.
+  const nominal = (reason: string): ReplayResult => ({ values: {}, provenance: 'nominal', reason });
 
   if (!base) return nominal('no roll metadata for the base record');
   for (const [label, d] of [['base', base], ['prefix', prefix], ['suffix', suffix]] as const) {

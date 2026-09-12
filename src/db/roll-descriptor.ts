@@ -15,17 +15,38 @@
 
 import { SLOT_FLAG_KEYS } from './slot-flags.js';
 import { ROLL_ORDER } from './roll-order.js';
-import { rollKeys, type RollDescriptor } from './rolls.js';
+import { rollKeys, UNMODELLED_KINDS, type RollDescriptor } from './rolls.js';
 
 /** Every key the traversal can read, expanded once. */
-const DRAW_KEYS: ReadonlySet<string> = new Set(ROLL_ORDER.flatMap((e) => rollKeys(e.kind, e.field)));
+const DRAW_KEYS: ReadonlySet<string> = new Set(
+  ROLL_ORDER.filter((e) => !UNMODELLED_KINDS.has(e.kind)).flatMap((e) => rollKeys(e.kind, e.field)),
+);
+
+/** Keys belonging to kinds we refuse: present in the table, not safe to replay. */
+const REFUSED_KEYS: ReadonlySet<string> = new Set(
+  ROLL_ORDER.filter((e) => UNMODELLED_KINDS.has(e.kind)).flatMap((e) => rollKeys(e.kind, e.field)),
+);
+
+/**
+ * Stats the engine carries through untouched rather than rolling.
+ *
+ * Established from the reference's own FIXED set at the pinned revision. These
+ * appear on ordinary gear - `defensiveProtection` is every armour piece's
+ * rating - so treating them as unknown would refuse most of a character.
+ */
+const FIXED: ReadonlySet<string> = new Set([
+  'characterBaseAttackSpeed', 'characterManaRegen', 'characterConstitution', 'characterAttackSpeed',
+  'characterSpellCastSpeed', 'characterRunSpeed', 'characterIncreasedExperience', 'characterIncreasedGold',
+  'characterLightRadius', 'characterGlobalReqReduction', 'characterLevelReqReduction', 'characterModifierPoints',
+  'defensiveProtection',
+]);
 
 /**
  * Fields that never reach the stream: presentation, physics, loot-table
  * bookkeeping and the identity strings. Anything outside this list and outside
  * `DRAW_KEYS` is treated as unmodelled rather than assumed harmless.
  */
-const IRRELEVANT = /^(actor|physics|mesh|bitmap|baseTexture|shader|scale$|maxTransparency|outlineThickness|castsShadows|drop|use|sound|fx|Class$|templateName|FileDescription|description|itemNameTag|itemText|itemClassification|itemLevel|itemCost|levelRequirement|lootRandomizer|marketAdjustmentPercent|itemSet|augmentSkill|augmentMastery|itemSkill|skillName|attributeScalePercent|completedRelicLevel|relic|artifact|blueprint|experience|expansion|craftingMaterial|soulbound|forceWeaponAnimation|weaponType)/;
+const IRRELEVANT = /^(actor|physics|mesh|bitmap|baseTexture|shader|scale$|maxTransparency|outlineThickness|castsShadows|drop|use|sound|fx|Class$|templateName|FileDescription|description|itemNameTag|itemText|itemClassification|itemLevel|itemCost|levelRequirement|lootRandomizer|marketAdjustmentPercent|itemSet|augmentSkill|augmentMastery|itemSkill|skillName|attributeScalePercent|completedRelicLevel|relic|artifact|blueprint|experience|expansion|craftingMaterial|soulbound|untradeable|medalVisible|forceWeaponAnimation|weaponType)/;
 
 /** Use-on restriction flags: which slots a socketable accepts, never a stat. */
 const SLOT_FLAGS: ReadonlySet<string> = new Set(SLOT_FLAG_KEYS);
@@ -50,15 +71,33 @@ export function rollDescriptor(fields: Readonly<Record<string, unknown>>): RollD
   for (const [key, raw] of Object.entries(fields)) {
     const value = numeric(raw);
     if (DRAW_KEYS.has(key)) {
-      // Zeros are kept out: a zero never draws, so it cannot move the stream,
-      // and keeping them would double the descriptor for no effect.
-      if (value !== undefined && value !== 0) kept[key] = value;
+      // A non-numeric value on a field that should draw is not something to
+      // skip past: we cannot tell what the engine would do with it.
+      if (value === undefined) { unsupported.push(key); continue; }
+      // Zeros are dropped because a zero never draws, so it cannot move the
+      // stream. Presence alone matters nowhere in the kinds we model; the kinds
+      // where it does are refused outright below.
+      if (value !== 0) kept[key] = value;
       continue;
     }
-    if (IRRELEVANT.test(key) || SLOT_FLAGS.has(key)) continue;
-    // An unknown field that is actually set is the dangerous case: it may or
-    // may not draw, and we cannot tell, so the record stops being replayable.
-    if (value !== undefined && value !== 0) unsupported.push(key);
+    // A field of a kind we do not model faithfully. Records carry the whole
+    // template, so almost every one of these is present at zero; a zero draws
+    // nothing and cannot move the stream, so only an active one is fatal.
+    if (REFUSED_KEYS.has(key)) {
+      if (value === undefined || value !== 0) unsupported.push(key);
+      continue;
+    }
+    if (FIXED.has(key) || IRRELEVANT.test(key) || SLOT_FLAGS.has(key)) continue;
+    // Conversion reads its type strings to decide whether to draw at all, and
+    // conversion is a kind we refuse, so any of them makes the item unsafe.
+    if (/^conversion/i.test(key)) { unsupported.push(key); continue; }
+    // A non-numeric value cannot be rolled: meshes, textures, tags and table
+    // names are description, and the engine has nothing to jitter there.
+    if (value === undefined) continue;
+    // An unknown numeric field that is actually set is the dangerous case: it
+    // may or may not draw, and we cannot tell, so the record stops being
+    // replayable rather than being replayed on an assumption.
+    if (value !== 0) unsupported.push(key);
   }
 
   const jitter = numeric(fields['lootRandomizerJitter']);
