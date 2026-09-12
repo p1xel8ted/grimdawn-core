@@ -33,7 +33,7 @@ import { SLOT_FLAG_KEYS } from './slot-flags.js';
 import { rollDescriptor } from './roll-descriptor.js';
 
 /** Bump when the shape below changes so stale caches rebuild instead of misreading. */
-export const DB_SCHEMA_VERSION = 19;
+export const DB_SCHEMA_VERSION = 20;
 
 export interface NormalizedDb {
   schemaVersion: number;

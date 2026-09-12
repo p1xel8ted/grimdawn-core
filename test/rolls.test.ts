@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { readCachedDb, writeCachedDb } from '../src/db/cache.js';
 import { DB_SCHEMA_VERSION, type NormalizedDb } from '../src/db/build.js';
 
-import { BASE_JITTER_PERCENT, REPLAYED_RESISTANCES, replayItem, rollKeys, rollSources, type RollDescriptor } from '../src/db/rolls.js';
+import { BASE_JITTER_PERCENT, REPLAYED_RESISTANCES, SKIPPED_KINDS, replayItem, rollKeys, rollSources, type RollDescriptor } from '../src/db/rolls.js';
 import { ROLL_ORDER } from '../src/db/roll-order.js';
 import { rollDescriptor } from '../src/db/roll-descriptor.js';
 import { replayItemResistances } from '../src/resolve-rolls.js';
@@ -25,6 +25,24 @@ describe('the roll order table', () => {
   it('lists every field once, in one pass', () => {
     const seen = new Set(ROLL_ORDER.map((e) => `${e.kind}:${e.field}`));
     expect(seen.size).toBe(ROLL_ORDER.length);
+  });
+
+  it('draws every reported resistance before the point the walk stops at', () => {
+    // This is the whole argument for stopping instead of modelling conversion:
+    // a draw taken after the last reported field cannot move one. If a future
+    // table moves a reported field past the stop, the skip stops being exact
+    // and this fails rather than quietly returning a wrong number.
+    const stop = ROLL_ORDER.findIndex((e) => SKIPPED_KINDS.has(e.kind));
+    expect(stop).toBeGreaterThan(-1);
+    for (const field of REPLAYED_RESISTANCES) {
+      const at = ROLL_ORDER.findIndex((e) => e.field === field);
+      expect(at, `${field} is not in the table`).toBeGreaterThan(-1);
+      expect(at, `${field} is drawn at or after the stop`).toBeLessThan(stop);
+    }
+    // Nothing but Def lies between the last reported field and the stop, so
+    // there is no unmodelled kind hiding in the gap.
+    const last = Math.max(...REPLAYED_RESISTANCES.map((f) => ROLL_ORDER.findIndex((e) => e.field === f)));
+    expect([...new Set(ROLL_ORDER.slice(last + 1, stop).map((e) => e.kind))]).toEqual(['Def']);
   });
 
   it('draws the defensive block after the offensive one', () => {
@@ -143,8 +161,36 @@ describe('rollDescriptor', () => {
   });
 
   it('refuses a record carrying a kind whose draws are not modelled', () => {
-    expect(rollDescriptor({ conversionInType: 'Physical', conversionPercentage: 100 }).unsupported).toContain('conversionInType');
-    expect(rollDescriptor({ offensiveSlowBleedingDurationMin: 3 }).unsupported).toContain('offensiveSlowBleedingDurationMin');
+    // OffSlow pairs a value with a duration and a chance, and none of the three
+    // is reproduced here.
+    expect(rollDescriptor({ offensiveSlowRunSpeedMin: 30 }).unsupported).toContain('offensiveSlowRunSpeedMin');
+    // A skill field on an affix is drawn before the main walk, so it stays
+    // refused even though the table lists it after the point the walk stops at.
+    expect(rollDescriptor({ skillCooldownReduction: 2 }).unsupported).toContain('skillCooldownReduction');
+  });
+
+  it('carries the six conversion keys but refuses any other one', () => {
+    const known = rollDescriptor({
+      conversionInType: 'Physical', conversionOutType: 'Fire', conversionPercentage: 100,
+      conversionInType2: 'Cold', conversionOutType2: 'Aether', conversionPercentage2: 50,
+    });
+    expect(known.unsupported).toBeUndefined();
+    // Matching the whole prefix would wave through a key nobody has looked at.
+    expect(rollDescriptor({ conversionSomethingNew: 12 }).unsupported).toEqual(['conversionSomethingNew']);
+  });
+
+  it('carries a slow-flat duration and chance, which are read but never rolled', () => {
+    const d = rollDescriptor({ offensiveSlowBleedingMin: 20, offensiveSlowBleedingDurationMin: 3, offensiveSlowBleedingChance: 25 });
+    expect(d.unsupported).toBeUndefined();
+    expect(d.fields).toEqual({ offensiveSlowBleedingMin: 20 });
+  });
+
+  it('records the slow-flat families whose duration key is missing', () => {
+    // Presence, not value: a Min of 0 closes the gate exactly as a 20 would,
+    // and the pruned field map has already dropped the zero by this point.
+    expect(rollDescriptor({ offensiveSlowFireMin: 0 }).slowFlatNoDuration).toEqual(['offensiveSlowFire']);
+    expect(rollDescriptor({ offensiveSlowFireMin: 0, offensiveSlowFireDurationMin: 0 }).slowFlatNoDuration).toBeUndefined();
+    expect(rollDescriptor({ defensiveAether: 100 }).slowFlatNoDuration).toBeUndefined();
   });
 
   it('refuses an unknown numeric field rather than assuming it is harmless', () => {
@@ -165,13 +211,44 @@ describe('rollDescriptor', () => {
 });
 
 describe('the boundaries a wrong answer would slip through', () => {
-  it('refuses an item carrying a slow-flat field, which reads presence not value', () => {
-    // With a base zero and a prefix value the engine takes a different branch,
-    // and the descriptor drops zeros, so the draw count would be one out and
-    // every later field wrong. Refusing the family is the honest answer.
+  // The three cases below share a prefix and a seed and differ only in which
+  // keys the base record owns. The engine gates the slow-flat family on the
+  // base owning a Min with no DurationMin beside it, so the first skips the
+  // family and the other two draw it: 106 against 107 is that one draw. Every
+  // figure is the pinned reference's own output for the same input.
+  const SLOW_PREFIX = { offensiveSlowFireMin: 10, lootRandomizerJitter: 20 };
+
+  it('skips a slow-flat family the base owns a Min for and no duration', () => {
+    // The base value is 0 and the prefix's is 10, so a walk that went by value
+    // would draw here and read every later field one draw out.
     const base = rollDescriptor({ offensiveSlowFireMin: 0, defensiveAether: 100 });
-    const prefix = rollDescriptor({ offensiveSlowFireMin: 10, lootRandomizerJitter: 20 });
-    expect(replayItem(12345, base, prefix).provenance).toBe('nominal');
+    const out = replayItem(12345, base, rollDescriptor(SLOW_PREFIX));
+    expect(out.provenance).toBe('seed-replayed');
+    expect(out.values['defensiveAether']).toBe(106);
+  });
+
+  it('draws the family when the duration key is there, even at zero', () => {
+    const base = rollDescriptor({ offensiveSlowFireMin: 0, offensiveSlowFireDurationMin: 0, defensiveAether: 100 });
+    expect(base.slowFlatNoDuration).toBeUndefined();
+    expect(replayItem(12345, base, rollDescriptor(SLOW_PREFIX)).values['defensiveAether']).toBe(107);
+  });
+
+  it('draws the family when the base does not own the Min at all', () => {
+    // An affix without a duration does not close the gate; only the base can.
+    const base = rollDescriptor({ defensiveAether: 100 });
+    expect(replayItem(12345, base, rollDescriptor(SLOW_PREFIX)).values['defensiveAether']).toBe(107);
+  });
+
+  it('reports the same resistances whether or not a record converts', () => {
+    // Conversion is drawn after every reported resistance, so adding it to an
+    // otherwise identical record must not move one.
+    const plain = rollDescriptor({ defensiveAether: 100, defensiveFire: 40 });
+    const converting = rollDescriptor({
+      defensiveAether: 100, defensiveFire: 40,
+      conversionInType: 'Physical', conversionOutType: 'Fire', conversionPercentage: 100,
+    });
+    expect(replayItem(12345, converting).values).toEqual(replayItem(12345, plain).values);
+    expect(replayItem(12345, plain).values).toEqual({ defensiveAether: 107, defensiveFire: 42 });
   });
 
   it('refuses a weapon, whose base physical damage is fixed rather than rolled', () => {

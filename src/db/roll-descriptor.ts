@@ -15,11 +15,40 @@
 
 import { SLOT_FLAG_KEYS } from './slot-flags.js';
 import { ROLL_ORDER } from './roll-order.js';
-import { rollKeys, UNMODELLED_KINDS, type RollDescriptor } from './rolls.js';
+import { rollKeys, SKIPPED_KINDS, SLOW_FLAT_FIELDS, UNMODELLED_KINDS, type RollDescriptor } from './rolls.js';
 
 /** Every key the traversal can read, expanded once. */
 const DRAW_KEYS: ReadonlySet<string> = new Set(
-  ROLL_ORDER.filter((e) => !UNMODELLED_KINDS.has(e.kind)).flatMap((e) => rollKeys(e.kind, e.field)),
+  ROLL_ORDER
+    .filter((e) => !UNMODELLED_KINDS.has(e.kind) && !SKIPPED_KINDS.has(e.kind))
+    .flatMap((e) => rollKeys(e.kind, e.field)),
+);
+
+/**
+ * Conversion keys the walk stops short of.
+ *
+ * The percentages are the `Conv` entries; the type strings are what the engine
+ * reads to decide whether a conversion draws at all. Every one of them is drawn
+ * after the last reported resistance, so none can move one. Listed by name
+ * rather than matched by prefix: a `conversion` key that is not one of these six
+ * is something new, and it should stop the record rather than be waved through
+ * on the strength of its name.
+ */
+const CARRIED_CONVERSION: ReadonlySet<string> = new Set([
+  'conversionInType', 'conversionOutType', 'conversionPercentage',
+  'conversionInType2', 'conversionOutType2', 'conversionPercentage2',
+]);
+
+/**
+ * Slow-flat keys the engine reads but never rolls.
+ *
+ * A slow-flat family draws `Min` and `Max` and nothing else. The duration and
+ * the chance are read - the chance decides whether the result becomes a proc
+ * line instead of a stat - but neither is ever handed to the jitter, so neither
+ * moves the stream.
+ */
+const CARRIED_SLOW_FLAT: ReadonlySet<string> = new Set(
+  SLOW_FLAT_FIELDS.flatMap((f) => [`${f}DurationMin`, `${f}Chance`]),
 );
 
 /** Keys belonging to kinds we refuse: present in the table, not safe to replay. */
@@ -88,8 +117,9 @@ export function rollDescriptor(fields: Readonly<Record<string, unknown>>): RollD
       continue;
     }
     if (FIXED.has(key) || IRRELEVANT.test(key) || SLOT_FLAGS.has(key)) continue;
-    // Conversion reads its type strings to decide whether to draw at all, and
-    // conversion is a kind we refuse, so any of them makes the item unsafe.
+    if (CARRIED_CONVERSION.has(key) || CARRIED_SLOW_FLAT.has(key)) continue;
+    // Any other conversion key is one we have not accounted for, and conversion
+    // is not modelled here, so it stops the record.
     if (/^conversion/i.test(key)) { unsupported.push(key); continue; }
     // A non-numeric value cannot be rolled: meshes, textures, tags and table
     // names are description, and the engine has nothing to jitter there.
@@ -102,10 +132,17 @@ export function rollDescriptor(fields: Readonly<Record<string, unknown>>): RollD
 
   const jitter = numeric(fields['lootRandomizerJitter']);
   const itemClass = typeof fields['Class'] === 'string' ? fields['Class'] : undefined;
+  // Read off the raw record, before zeros are dropped: the engine gates on the
+  // key being there at all, so a `Min` of 0 closes the gate just as a 30 does.
+  // This is the one place the pruned `fields` map cannot answer the question,
+  // which is why the answer is worked out here and carried.
+  const has = (f: string): boolean => Object.prototype.hasOwnProperty.call(fields, f);
+  const slowFlatNoDuration = SLOW_FLAT_FIELDS.filter((f) => has(`${f}Min`) && !has(`${f}DurationMin`));
   return {
     fields: kept,
     ...(itemClass ? { itemClass } : {}),
     ...(jitter ? { jitter } : {}),
+    ...(slowFlatNoDuration.length ? { slowFlatNoDuration } : {}),
     ...(unsupported.length ? { unsupported: unsupported.sort() } : {}),
   };
 }

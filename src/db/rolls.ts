@@ -87,13 +87,30 @@ export const rollSources = (kind: RollKind): readonly ('prefix' | 'suffix' | 'ba
  * this module exists to produce.
  */
 export const UNMODELLED_KINDS: ReadonlySet<RollKind> = new Set([
-  'Skill', 'Conv', 'OffSlow', 'RetalDur', 'RetalReflex', 'OffReflex', 'OffReduc',
-  // SlowFlat reads presence rather than value: a source carrying the field at
-  // an explicit zero changes which branch runs, and the descriptor drops zeros.
-  // Keeping the zero would mean carrying presence for every field on every
-  // record, so the family is refused instead.
-  'SlowFlat',
+  'Skill', 'OffSlow', 'RetalDur', 'RetalReflex', 'OffReflex', 'OffReduc',
 ]);
+
+/**
+ * The kinds the walk never reaches, because it stops at the first of them.
+ *
+ * `Conv` is entry 216 of 224, and every field in `REPLAYED_RESISTANCES` is
+ * drawn by entry 156 with only `Def` entries in between, so a conversion draw
+ * lands after every value this module reports and cannot move one. Stopping is
+ * therefore exact for this API rather than an approximation.
+ *
+ * This is not a conversion model. Nothing here reproduces a conversion draw,
+ * and a caller wanting conversion values needs the type strings and the
+ * multiplicative jitter that goes with them, neither of which lives here.
+ *
+ * `Skill` sits after `Conv` and is left in `UNMODELLED_KINDS` regardless: its
+ * affix fields are drawn early, before the main walk reaches them, so stopping
+ * short of the table's `Skill` entries does not make them safe.
+ */
+export const SKIPPED_KINDS: ReadonlySet<RollKind> = new Set<RollKind>(['Conv']);
+
+/** The slow-flat families, in table order. */
+export const SLOW_FLAT_FIELDS: readonly string[] =
+  ROLL_ORDER.filter((e) => e.kind === 'SlowFlat').map((e) => e.field);
 
 /** Base records carry no jitter field of their own; the engine uses this. */
 export const BASE_JITTER_PERCENT = 20;
@@ -112,6 +129,17 @@ export interface RollDescriptor {
   readonly itemClass?: string;
   /** `lootRandomizerJitter` on an affix; absent on a base record. */
   readonly jitter?: number;
+  /**
+   * Slow-flat families where this record owns a `Min` key with no `DurationMin`
+   * beside it, which makes the engine skip the whole family before any source
+   * draws.
+   *
+   * The gate is own-property presence, not value: a `Min` of 0 still closes it,
+   * and the descriptor drops zeros, so the answer has to be worked out from the
+   * raw record and carried. Only the base record's gate counts - an affix
+   * lacking a duration does not close it.
+   */
+  readonly slowFlatNoDuration?: readonly string[];
   /** Non-empty when the record carries something the traversal does not model. */
   readonly unsupported?: readonly string[];
 }
@@ -199,6 +227,14 @@ export function replayItem(
   const at = (s: 'base' | 'prefix' | 'suffix', f: string): number => src[s].fields[f] ?? 0;
 
   for (const { kind, field } of ROLL_ORDER) {
+    // Everything from here on is drawn after the last reported resistance. See
+    // SKIPPED_KINDS for why stopping is exact rather than approximate.
+    if (SKIPPED_KINDS.has(kind)) break;
+    // The engine gates a slow-flat family on the base record owning a `Min`
+    // with no `DurationMin`, and skips every source when it does. Without this
+    // an active affix draws where the engine drew nothing, and every field
+    // after it reads wrong.
+    if (kind === 'SlowFlat' && base.slowFlatNoDuration?.includes(field)) continue;
     const keys = rollKeys(kind, field);
     const sources = ['base', 'prefix', 'suffix'] as const;
     if (!keys.some((f) => sources.some((s) => at(s, f) !== 0))) continue;
