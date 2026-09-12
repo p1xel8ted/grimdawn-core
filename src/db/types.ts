@@ -43,6 +43,12 @@ export interface AttrRequirements {
 }
 
 export interface DbItem {
+  /**
+   * What the seed replay needs from this record, when the record is one it can
+   * use. Absent on a programmatically built `DbItem` and on a cache written
+   * before the descriptor existed, which both mean "do not replay".
+   */
+  rolls?: import('./rolls.js').RollDescriptor;
   /** DBR record path — the key items are stored under in saves. */
   record: string;
   /** Localized display name, or a best-effort fallback when no tag resolves. */
@@ -164,6 +170,8 @@ export interface DbSet {
  * which is why an item-only sum reads far too low.
  */
 export interface DbAffix {
+  /** As `DbItem.rolls`; an affix supplies its own jitter percentage. */
+  rolls?: import('./rolls.js').RollDescriptor;
   record: string;
   /** Absent for the crafting bonuses the game deliberately leaves unnamed. */
   name?: string;

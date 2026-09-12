@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { BASE_JITTER_PERCENT, replayItem, rollKeys, rollSources, type RollDescriptor } from '../src/db/rolls.js';
+import { BASE_JITTER_PERCENT, REPLAYED_RESISTANCES, replayItem, rollKeys, rollSources, type RollDescriptor } from '../src/db/rolls.js';
 import { ROLL_ORDER } from '../src/db/roll-order.js';
 import { rollDescriptor } from '../src/db/roll-descriptor.js';
 
@@ -187,5 +187,50 @@ describe('the boundaries a wrong answer would slip through', () => {
   it('still replays an ordinary armour piece', () => {
     const out = replayItem(12345, rollDescriptor({ Class: 'ArmorProtective_Chest', defensiveAether: 100 }));
     expect(out.provenance).toBe('seed-replayed');
+  });
+});
+
+describe('what the replay hands back', () => {
+  it('reports resistances and keeps its working to itself', () => {
+    // The walk has to compute offensive values to consume the right draws, but
+    // they are unscaled intermediates - handing one out invites a caller to use
+    // it as a stat.
+    const out = replayItem(RING.seed, RING.base, RING.prefix, RING.suffix);
+    expect(out.provenance).toBe('seed-replayed');
+    expect(Object.keys(out.values).every((k) => REPLAYED_RESISTANCES.includes(k))).toBe(true);
+    expect(out.values['offensivePhysicalModifier']).toBeUndefined();
+    expect(out.values['characterOffensiveAbility']).toBeUndefined();
+    // …while the resistances it does report are unchanged by the filtering.
+    expect(out.values['defensiveAether']).toBe(20);
+  });
+});
+
+describe('the descriptor across the database cache', () => {
+  it('survives being written and read back as JSON', () => {
+    // The descriptor is only useful if it reaches a later run intact; the cache
+    // is JSON, so anything the round trip drops is silently a fallback.
+    const before = rollDescriptor({ Class: 'ArmorProtective_Chest', defensiveAether: 18, someNewStat: 4, lootRandomizerJitter: 18 });
+    const after = JSON.parse(JSON.stringify(before)) as typeof before;
+    expect(after).toEqual(before);
+    expect(replayItem(RING.seed, after).provenance).toBe(replayItem(RING.seed, before).provenance);
+  });
+
+  it('treats a record with no descriptor as unreplayable rather than as empty', () => {
+    // A DbItem built in code, or one read from a cache written before the
+    // descriptor existed, has none. Reading that as "no fields" would replay
+    // an item whose draws we never saw.
+    expect(replayItem(RING.seed, undefined).provenance).toBe('nominal');
+  });
+
+  it('tells a missing affix apart from an affix with nothing to roll', () => {
+    // An item genuinely without a prefix, and an item whose prefix record we
+    // failed to index, must not look the same: the first is replayable.
+    const noPrefix = replayItem(RING.seed, RING.base);
+    const emptyPrefix = replayItem(RING.seed, RING.base, { fields: {} });
+    expect(noPrefix.provenance).toBe('seed-replayed');
+    expect(emptyPrefix.provenance).toBe('seed-replayed');
+    expect(emptyPrefix.values).toEqual(noPrefix.values);
+    // …whereas one that carries something unmodelled refuses.
+    expect(replayItem(RING.seed, RING.base, { fields: {}, unsupported: ['x'] }).provenance).toBe('nominal');
   });
 });

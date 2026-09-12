@@ -116,8 +116,29 @@ export interface RollDescriptor {
   readonly unsupported?: readonly string[];
 }
 
+/**
+ * The resistance fields this module reports.
+ *
+ * `defensiveElementalResistance` is one field the game expands to fire, cold
+ * and lightning; the caller does that expansion, as it already does for the
+ * nominal value.
+ */
+export const REPLAYED_RESISTANCES: readonly string[] = [
+  'defensivePhysical', 'defensivePierce', 'defensiveFire', 'defensiveCold', 'defensiveLightning',
+  'defensivePoison', 'defensiveLife', 'defensiveAether', 'defensiveChaos', 'defensiveBleeding',
+  'defensiveElementalResistance',
+];
+const REPORTED: ReadonlySet<string> = new Set(REPLAYED_RESISTANCES);
+
 export interface ReplayResult {
-  /** Field values after the roll, for the fields the traversal produced. */
+  /**
+   * The rolled resistances, and nothing else.
+   *
+   * The walk computes offensive and retaliation values too, because it has to
+   * in order to consume the right draws, but those are intermediate: they are
+   * unscaled and some are held fixed, so handing them out would invite a caller
+   * to treat a working number as a stat.
+   */
   readonly values: Readonly<Record<string, number>>;
   readonly provenance: RollProvenance;
   /** Why the item fell back, when it did. */
@@ -207,5 +228,7 @@ export function replayItem(
       if (total !== 0) values[key] = total;
     }
   }
-  return { values, provenance: 'seed-replayed' };
+  const reported: Record<string, number> = {};
+  for (const [k, v] of Object.entries(values)) if (REPORTED.has(k)) reported[k] = v;
+  return { values: reported, provenance: 'seed-replayed' };
 }

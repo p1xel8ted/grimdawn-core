@@ -28,3 +28,4 @@ export { safeReaddir, steamRoots, windowsRoots, documentRoots, STEAM_APP_ID } fr
 export { parseGdc, parseGdcRecording } from './save/gdc.js';
 export type { CharacterSave, CharacterSkill, Attributes, Difficulty, FactionRep } from './save/types.js';
 export { DIFFICULTIES, parseDifficulty, EQUIP_SLOT_NAMES } from './save/types.js';
+export { replayItemResistances } from './resolve-rolls.js';

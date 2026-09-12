@@ -30,9 +30,10 @@ import {
   type StatValue,
 } from './types.js';
 import { SLOT_FLAG_KEYS } from './slot-flags.js';
+import { rollDescriptor } from './roll-descriptor.js';
 
 /** Bump when the shape below changes so stale caches rebuild instead of misreading. */
-export const DB_SCHEMA_VERSION = 18;
+export const DB_SCHEMA_VERSION = 19;
 
 export interface NormalizedDb {
   schemaVersion: number;
@@ -726,7 +727,7 @@ export function buildDb(input: BuildInput): NormalizedDb {
       // Crafting-bonus affixes have no `lootRandomizerName` at all — the game
       // shows their stats inline rather than a name. Recording them without one
       // keeps "nameless by design" distinguishable from "missing".
-      const affix: DbAffix = { record: path, stats: extractStats(rec.fields) };
+      const affix: DbAffix = { record: path, stats: extractStats(rec.fields), rolls: rollDescriptor(rec.fields) };
       const name = localize(str(rec, 'lootRandomizerName'));
       if (name) affix.name = name;
       const jitter = num(rec, 'lootRandomizerJitter');
@@ -754,6 +755,7 @@ export function buildDb(input: BuildInput): NormalizedDb {
       slot: cls,
       iconPath: ICON_KEYS.map((key) => str(rec, key)).find(Boolean) ?? '',
       stats: extractStats(rec.fields),
+      rolls: rollDescriptor(rec.fields),
       ...buildAttrRequirements(rec, cls, records),
     };
 
